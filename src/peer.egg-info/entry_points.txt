@@ -1,0 +1,3 @@
+[console_scripts]
+peer = peer.interfaces.cli.cli:main
+peer-sui = peer.interfaces.cli.cli_with_sui:main
