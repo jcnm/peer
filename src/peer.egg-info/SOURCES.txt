@@ -1,3 +1,4 @@
+LICENSE
 README.md
 pyproject.toml
 src/__init__.py
@@ -13,9 +14,11 @@ src/peer/domain/__init__.py
 src/peer/domain/entities/__init__.py
 src/peer/domain/entities/message_entities.py
 src/peer/domain/ports/__init__.py
+src/peer/domain/ports/stt_port.py
 src/peer/domain/ports/system_check_port.py
 src/peer/domain/ports/tts_port.py
 src/peer/domain/services/__init__.py
+src/peer/domain/services/command_service.py
 src/peer/domain/services/message_service.py
 src/peer/domain/services/system_check_service.py
 src/peer/infrastructure/__init__.py
