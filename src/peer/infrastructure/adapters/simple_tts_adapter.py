@@ -6,6 +6,10 @@ import os
 import platform
 import subprocess
 import logging
+import threading
+import queue
+import time
+
 from typing import Optional
 
 try:
@@ -35,7 +39,7 @@ class SimpleTTSAdapter(TTSPort):
         # Initialiser avec configuration optimale
         if self._init_pyttsx3():
             print("Moteur pyttsx3 initialisé avec succès")
-            # self.configure_natural_speech()
+            self.configure_natural_speech()
     
     def _test_say_command(self) -> bool:
         """Teste si la commande say fonctionne."""
@@ -153,7 +157,7 @@ class SimpleTTSAdapter(TTSPort):
             elif system == "darwin":  # macOS
                 # macOS a d'excellentes voix système
                 voices = self.pyttsx3_engine.getProperty('voices')
-                premium_voices = ['alex', 'samantha', 'victoria', 'thomas']
+                premium_voices = ['thomas', 'audrey',  'shelley', 'grandma', 'eddy', 'clementine', 'celine', 'juliette']
                 
                 for voice in voices:
                     voice_name = voice.name.lower() if voice.name else ""
@@ -243,18 +247,18 @@ class SimpleTTSAdapter(TTSPort):
     def speak(self, text: str) -> bool:
         """Convertit le texte en parole et le lit à haute voix."""
         if not self.initialized:
-            logger.error("Le service TTS n'est pas initialisé")
+            print("Le service TTS n'est pas initialisé")
             print(f"TTS: {text}")  # Fallback textuel
             return False
         
         try:
-            logger.info(f"Vocalisation: '{text[:50]}{'...' if len(text) > 50 else ''}'")
-            
+            print(f"Vocalisation: '{text[:50]}{'...' if len(text) > 50 else ''}'")
+
             if self.use_pyttsx3 and self.pyttsx3_engine:
                 # Utiliser pyttsx3
                 self.pyttsx3_engine.say(text)
                 self.pyttsx3_engine.runAndWait()
-                logger.info("Vocalisation pyttsx3 terminée")
+                print("Vocalisation pyttsx3 terminée")
                 return True
             
             elif self.platform == "darwin" and self.tts_command == "say":
@@ -264,7 +268,7 @@ class SimpleTTSAdapter(TTSPort):
                     check=True,
                     timeout=30
                 )
-                logger.info("Vocalisation 'say' terminée")
+                print("Vocalisation 'say' terminée")
                 return True
             
             else:
@@ -280,10 +284,45 @@ class SimpleTTSAdapter(TTSPort):
             print("Timeout lors de la vocalisation")
             return False
         except Exception as e:
-            logger.error(f"Erreur lors de la vocalisation: {str(e)}")
+            print(f"Erreur lors de la vocalisation: {str(e)}")
             print(f"TTS (erreur): {text}")  # Fallback textuel
             return False
+       
+       
+       
+       
+       
+       
+       
+       
+       
+       
+       
+    # def speak(self, text: str) -> bool:
+    #     """
+    #     Convertit le texte en parole et le lit à haute voix.
         
+    #     Args:
+    #         text: Texte à convertir en parole
+            
+    #     Returns:
+    #         True si la conversion et la lecture ont réussi, False sinon
+    #     """
+    #     if not self.initialized or not self.tts_command:
+    #         logger.error("Le service TTS n'est pas initialisé")
+    #         return False
+        
+    #     try:
+    #         if '%s' in self.tts_command:
+    #             command = self.tts_command % text
+    #             subprocess.run(command, shell=True, check=True)
+    #         else:
+    #             subprocess.run([self.tts_command, text], check=True)
+    #         return True
+    #     except subprocess.SubprocessError as e:
+    #         logger.error(f"Erreur lors de la synthèse vocale: {str(e)}")
+    #         return False
+     
     def is_available(self) -> bool:
         """Vérifie si le service de synthèse vocale est disponible."""
         return self.initialized
