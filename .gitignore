@@ -1,0 +1,101 @@
+# === Python ===
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+
+# === Distribution / packaging ===
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# === Virtual environments ===
+venv/
+env/
+ENV/
+.venv/
+.env/
+virtualenv/
+pipenv/
+# For Peer virtal environments
+.peercache/
+.vepeer/ 
+vepeer/
+peercache/
+config/
+
+# === PyInstaller ===
+*.manifest
+*.spec
+
+# === Unit test / coverage ===
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+test-results/
+
+# === Jupyter Notebook ===
+.ipynb_checkpoints
+*.ipynb~
+
+# === pyenv ===
+.python-version
+
+# === pipenv / poetry ===
+Pipfile.lock
+poetry.lock
+
+# === mypy / type checkers ===
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# === pyright / pyre ===
+.pyright/
+.pyre/
+
+# === logs / local dev files ===
+*.log
+*.tmp
+*.bak
+*.swp
+*.swo
+*~
+
+# === IDEs and editors ===
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+*.code-workspace
+
+# === macOS / Linux / Windows system files ===
+.DS_Store
+Thumbs.db
+desktop.ini
