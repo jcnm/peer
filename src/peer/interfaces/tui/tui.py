@@ -1,5 +1,7 @@
 """
 Module contenant l'interface TUI de Peer.
+
+Refactorisé pour utiliser le daemon central et l'adaptateur TUI.
 """
 
 import sys
@@ -24,21 +26,21 @@ try:
     from rich.layout import Layout
     from rich.text import Text
     from rich.prompt import Prompt
+    from rich.live import Live
 except ImportError as e:
     print(f"Erreur lors du chargement des dépendances: {e}")
     print("Veuillez installer les dépendances requises:")
     print("  pip install rich")
     sys.exit(1)
 
-# Importation des services
-from peer.domain.services.message_service import MessageService
-from peer.domain.services.system_check_service import SystemCheckService
-from peer.domain.services.command_service import CommandService
-from peer.infrastructure.adapters.simple_system_check_adapter import SimpleSystemCheckAdapter
+# Importation du core centralisé
+from peer.core import get_daemon, TUIAdapter, CoreRequest, CoreResponse, InterfaceType
 
 class TUI:
     """
     Interface utilisateur textuelle (Text User Interface) pour Peer.
+    
+    Refactorisée pour utiliser le daemon central via l'adaptateur TUI.
     """
     
     def __init__(self):
@@ -46,15 +48,22 @@ class TUI:
         self.logger = logging.getLogger("TUI")
         self.console = Console()
         
-        # Initialisation des services
-        self.message_service = MessageService()
-        self.system_check_service = SystemCheckService(SimpleSystemCheckAdapter())
-        self.command_service = CommandService()  # Service centralisé de commandes
+        # Obtenir l'instance du daemon central
+        self.daemon = get_daemon()
+        
+        # Créer l'adaptateur TUI pour la traduction des commandes
+        self.adapter = TUIAdapter()
+        
+        # Créer une session pour cette interface TUI
+        self.session_id = self.daemon.create_session(InterfaceType.TUI)
+        self.adapter.set_session_id(self.session_id)
         
         # Initialisation des variables d'état
         self.running = False
         self.layout = None
         self.messages = []
+        
+        self.logger.info(f"TUI initialized with session {self.session_id}")
     
     def _setup_layout(self):
         """Configure la disposition de l'interface."""
@@ -68,9 +77,10 @@ class TUI:
         )
         
         # Configurer l'en-tête
+        version = self.daemon.get_version()
         self.layout["header"].update(
             Panel(
-                Text("Peer - Interface Textuelle", style="bold blue"),
+                Text(f"Peer v{version} - Interface Textuelle", style="bold blue"),
                 style="blue"
             )
         )
@@ -96,6 +106,102 @@ class TUI:
         """Met à jour le panneau principal avec les messages."""
         content = ""
         for msg in self.messages[-10:]:  # Afficher les 10 derniers messages
+            if msg["type"] == "user":
+                content += f"[bold blue]Vous:[/bold blue] {msg['text']}\n"
+            else:
+                content += f"[bold green]Peer:[/bold green] {msg['text']}\n"
+        
+        if not content:
+            content = "Aucun message pour le moment. Tapez une commande..."
+        
+        self.layout["main"].update(
+            Panel(
+                Text.from_markup(content),
+                title="Conversation",
+                style="green"
+            )
+        )
+    
+    def _execute_command(self, user_input: str):
+        """
+        Exécute une commande utilisateur via le daemon central.
+        
+        Args:
+            user_input: Commande saisie par l'utilisateur
+        """
+        try:
+            # Ajouter le message utilisateur
+            self.messages.append({"type": "user", "text": user_input})
+            
+            # Traduire l'input via l'adaptateur TUI
+            core_request = self.adapter.translate_to_core(user_input)
+            
+            # Exécuter via le daemon
+            core_response = self.daemon.execute_command(core_request)
+            
+            # Traduire la réponse
+            tui_response = self.adapter.translate_from_core(core_response)
+            
+            # Ajouter la réponse aux messages
+            response_text = tui_response.get('message', 'Aucune réponse')
+            self.messages.append({"type": "peer", "text": response_text})
+            
+        except Exception as e:
+            self.logger.error(f"Erreur lors de l'exécution de la commande: {e}")
+            self.messages.append({"type": "peer", "text": f"Erreur: {str(e)}"})
+    
+    def run(self):
+        """
+        Lance l'interface TUI.
+        """
+        self.running = True
+        self._setup_layout()
+        
+        try:
+            self.console.clear()
+            
+            # Affichage initial
+            self.console.print(self.layout)
+            
+            while self.running:
+                # Demander à l'utilisateur une commande
+                try:
+                    user_input = Prompt.ask("[bold blue]Votre commande")
+                    
+                    if user_input.lower() in ['quitter', 'quit', 'exit']:
+                        self.running = False
+                        break
+                    
+                    # Exécuter la commande
+                    self._execute_command(user_input)
+                    
+                    # Mettre à jour l'affichage
+                    self._update_main_panel()
+                    self.console.clear()
+                    self.console.print(self.layout)
+                    
+                except KeyboardInterrupt:
+                    self.running = False
+                    break
+                except Exception as e:
+                    self.logger.error(f"Erreur dans la boucle TUI: {e}")
+                    self.messages.append({"type": "peer", "text": f"Erreur système: {str(e)}"})
+                    self._update_main_panel()
+                    self.console.clear()
+                    self.console.print(self.layout)
+                    
+        finally:
+            # Nettoyer la session
+            if self.session_id:
+                self.daemon.end_session(self.session_id)
+            
+            self.console.print("[bold red]Au revoir![/bold red]")
+            self.logger.info("TUI stopped")
+    
+    def _update_conversation_panel(self):
+        """Met à jour le panneau de conversation avec les derniers messages."""
+        content = ""
+        for msg in self.messages[-10:]:  # Derniers 10 messages
             if msg["type"] == "user":
                 content += f"[bold blue]Vous:[/bold blue] {msg['text']}\n"
             else:

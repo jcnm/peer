@@ -1,5 +1,7 @@
 """
 Module contenant l'interface CLI de Peer.
+
+Refactorisé pour utiliser le daemon central et l'adaptateur CLI.
 """
 
 import sys
@@ -16,23 +18,31 @@ logging.basicConfig(
     ]
 )
 
-# Importation des services
-from peer.domain.services.message_service import MessageService
-from peer.domain.services.system_check_service import SystemCheckService
-from peer.domain.services.command_service import CommandService
-from peer.infrastructure.adapters.simple_system_check_adapter import SimpleSystemCheckAdapter
+# Importation du core centralisé
+from peer.core import get_daemon, CLIAdapter, CoreRequest, CoreResponse, InterfaceType
 
 class CLI:
     """
     Interface en ligne de commande pour Peer.
+    
+    Refactorisée pour utiliser le daemon central via l'adaptateur CLI.
     """
     
     def __init__(self):
         """Initialise l'interface CLI."""
         self.logger = logging.getLogger("CLI")
-        self.message_service = MessageService()
-        self.system_check_service = SystemCheckService(SimpleSystemCheckAdapter())
-        self.command_service = CommandService()  # Service centralisé de commandes
+        
+        # Obtenir l'instance du daemon central
+        self.daemon = get_daemon()
+        
+        # Créer l'adaptateur CLI pour la traduction des commandes
+        self.adapter = CLIAdapter()
+        
+        # Créer une session pour cette interface CLI
+        self.session_id = self.daemon.create_session(InterfaceType.CLI)
+        self.adapter.set_session_id(self.session_id)
+        
+        self.logger.info(f"CLI initialized with session {self.session_id}")
     
     def parse_args(self, args: List[str]) -> argparse.Namespace:
         """
@@ -70,23 +80,42 @@ class CLI:
         if args is None:
             args = sys.argv[1:]
         
-        parsed_args = self.parse_args(args)
-        
-        # Configurer le niveau de log
-        if parsed_args.verbose:
-            logging.getLogger().setLevel(logging.DEBUG)
-            self.logger.debug("Mode verbeux activé")
-        
-        # Exécuter la commande via le service centralisé
         try:
-            result = self.command_service.execute_command(parsed_args.command, parsed_args.args)
-            print(result)
+            parsed_args = self.parse_args(args)
+            
+            # Configurer le niveau de log
+            if parsed_args.verbose:
+                logging.getLogger().setLevel(logging.DEBUG)
+                self.logger.debug("Mode verbeux activé")
+            
+            # Traduire les arguments CLI en requête core via l'adaptateur
+            interface_input = {
+                'command': parsed_args.command,
+                'args': parsed_args.args
+            }
+            
+            core_request = self.adapter.translate_to_core(interface_input)
+            
+            # Exécuter la commande via le daemon
+            core_response = self.daemon.execute_command(core_request)
+            
+            # Traduire la réponse core en format CLI
+            cli_output = self.adapter.translate_from_core(core_response)
+            
+            # Afficher le résultat
+            print(cli_output)
+            
+            # Retourner le code de sortie approprié
+            return 0 if core_response.type.value in ['success', 'info'] else 1
+            
         except Exception as e:
             self.logger.error(f"Erreur lors de l'exécution de la commande: {e}")
             print(f"Erreur: {e}")
             return 1
-        
-        return 0
+        finally:
+            # Nettoyer la session si nécessaire
+            if hasattr(self, 'session_id') and self.session_id:
+                self.daemon.end_session(self.session_id)
 
 def main():
     """Point d'entrée principal de l'interface CLI."""
