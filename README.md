@@ -6,6 +6,32 @@ Peer Minimal est une version simplifiée de l'application Peer, respectant l'arc
 - Vérification de l'état du système via différentes interfaces
 - Interface vocale SUI avec reconnaissance vocale 100% locale
 
+## Fonctionnalités
+- **Message de bienvenue** : Affiche et vocalise "Bienvenue my peer" au démarrage
+- **Vérification système** : Vérifie l'état du système et de ses composants
+  - CLI : `peer --check`
+  - API : `/check`
+  - TUI : Option "Check" dans le menu
+  - SUI : Commande vocale "Comment ça va"
+- **Interface SUI améliorée** :
+  - Utilise plusieurs moteurs de reconnaissance vocale 100% locaux :
+    - Whisper (OpenAI) - Haute qualité
+    - Vosk - Léger et rapide
+    - Wav2Vec2 (Meta) - Alternative puissante
+  - Analyse la machine au démarrage avec commentaire humoristique
+  - Annonce l'heure chaque minute pendant l'écoute
+  - Fournit un indicateur visuel d'état (écoute, parole, attente)
+  - Permet d'interrompre le système en disant "quitter" à tout moment
+
+
+### Commandes disponibles
+A court terme on se concentre sur l'architecture et implémentons les présentes commandes.
+- `aide` - Affiche l'aide des commandes disponibles
+- `heure` - Affiche l'heure actuelle
+- `date` - Affiche la date actuelle
+- `version` - Affiche la version de Peer
+- `echo [texte]` - Répète le texte fourni
+
 ## Architecture
 Le projet suit une architecture hexagonale pour une évolution facile (ports et adaptateurs) avec les couches suivantes :
 - **Domain** : Entités, ports et services métier
@@ -307,32 +333,6 @@ pip install --no-index --find-links=./offline_packages transformers torch==2.0.1
 ├── run_sui.sh
 └── run_tests.sh
 ```
-
-## Fonctionnalités
-- **Message de bienvenue** : Affiche et vocalise "Bienvenue my peer" au démarrage
-- **Vérification système** : Vérifie l'état du système et de ses composants
-  - CLI : `peer --check`
-  - API : `/check`
-  - TUI : Option "Check" dans le menu
-  - SUI : Commande vocale "Comment ça va"
-- **Interface SUI améliorée** :
-  - Utilise plusieurs moteurs de reconnaissance vocale 100% locaux :
-    - Whisper (OpenAI) - Haute qualité
-    - Vosk - Léger et rapide
-    - Wav2Vec2 (Meta) - Alternative puissante
-  - Analyse la machine au démarrage avec commentaire humoristique
-  - Annonce l'heure chaque minute pendant l'écoute
-  - Fournit un indicateur visuel d'état (écoute, parole, attente)
-  - Permet d'interrompre le système en disant "quitter" à tout moment
-
-
-### Commandes disponibles
-A court terme on se concentre sur l'architecture et implémentons les présentes commandes.
-- `aide` - Affiche l'aide des commandes disponibles
-- `heure` - Affiche l'heure actuelle
-- `date` - Affiche la date actuelle
-- `version` - Affiche la version de Peer
-- `echo [texte]` - Répète le texte fourni
 
 ## Résolution des problèmes courants
 
