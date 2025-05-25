@@ -427,9 +427,9 @@ class SUI:
         if is_speaking:
             sys.stdout.write("🔊 Peer parle... (dites 'quitter' pour arrêter) ")
         elif is_listening:
-            sys.stdout.write("🎤 Écoute active... ")
+            sys.stdout.write("🎤 Écoute active...(dites: 'comment ça va ? pour avoir l'état du système)' ")
         else:
-            sys.stdout.write("⏳ En attente... ")
+            sys.stdout.write("⏳ En attente... (Interprétation de votre commande - vous pouvez poursuivre) ")
         
         sys.stdout.flush()
     
