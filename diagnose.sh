@@ -1,5 +1,16 @@
-#!/bin/bash
-# Script de diagnostic pour l'installation de Whisper et autres moteurs STT
+#!/usr/bin/env bash
+
+# Script de diagnostic pour l'environnement Peer
+# Ce script analyse l'environnement virtuel et identifie les problèmes potentiels
+# Aussi diagnostic pour l'installation de Whisper et autres moteurs STT
+
+set -euo pipefail
+IFS=$'\n\t'
+
+# Variables globales
+readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly VENV_NAME="vepeer"
+readonly VENV_PATH="$SCRIPT_DIR/$VENV_NAME"
 
 # Couleurs pour une meilleure lisibilité
 RED='\033[0;31m'
@@ -26,6 +37,29 @@ warning() {
 # Fonction pour afficher les messages d'erreur
 error() {
     echo -e "${RED}ERREUR:${NC} $1"
+}
+# Fonction pour afficher les messages
+print_message() {
+    local level="$1"
+    local message="$2"
+    
+    case "$level" in
+        "info")
+            info "$message"
+            ;;
+        "success")
+            success "$message"
+            ;;
+        "warning")
+            warning "$message"
+            ;;
+        "error")
+            error "$message"
+            ;;
+        *)
+            echo "$message"
+            ;;
+    esac
 }
 
 # Fonction pour vérifier si une commande existe
@@ -57,6 +91,204 @@ check_venv() {
         success "Environnement virtuel activé: $VIRTUAL_ENV"
         return 0
     fi
+}
+# Vérifier si l'environnement virtuel est activé
+check_venv_activated() {
+    print_message "info" "Vérification de l'environnement virtuel..."
+    
+    if [[ -z "${VIRTUAL_ENV:-}" ]]; then
+        if [[ -f "$VENV_PATH/bin/activate" ]]; then
+            print_message "info" "Activation de l'environnement virtuel: $VENV_PATH - 'source $VENV_PATH/bin/activate'"
+            source "$VENV_PATH/bin/activate"
+            print_message "success" "Environnement virtuel activé: $VIRTUAL_ENV"
+        else
+            print_message "error" "Environnement virtuel non trouvé: $VENV_PATH"
+            print_message "info" "Veuillez exécuter ./install.sh pour créer l'environnement virtuel - 'python -m venv $VENV_PATH && source $VENV_PATH/bin/activate'"
+            exit 1
+        fi
+    else
+        print_message "success" "Environnement virtuel activé: $VIRTUAL_ENV"
+    fi
+}
+
+# Vérifier les dépendances problématiques
+check_problematic_dependencies() {
+    print_message "info" "Vérification des dépendances problématiques..."
+    
+    # Vérifier asyncio
+    if python -c "import asyncio; print(f'asyncio version: {asyncio.__version__}')" 2>/dev/null; then
+        local asyncio_version
+        asyncio_version=$(python -c "import asyncio; print(asyncio.__version__)" 2>/dev/null)
+        print_message "success" "asyncio version $asyncio_version est installé"
+        
+        # Vérifier si la version est trop ancienne
+        if [[ "$asyncio_version" < "3.4.3" ]]; then
+            print_message "error" "Version d'asyncio trop ancienne. Version 3.4.3+ requise."
+            print_message "info" "Correction: pip install 'asyncio>=3.4.3' --force-reinstall"
+        fi
+    else
+        print_message "error" "Impossible d'importer asyncio"
+    fi
+    
+    # Vérifier torch
+    if python -c "import torch; print(f'torch version: {torch.__version__}')" 2>/dev/null; then
+        local torch_version
+        torch_version=$(python -c "import torch; print(torch.__version__)" 2>/dev/null)
+        print_message "success" "torch version $torch_version est installé"
+    else
+        print_message "warning" "torch n'est pas installé ou importable"
+    fi
+    
+    # Vérifier numpy
+    if python -c "import numpy; print(f'numpy version: {numpy.__version__}')" 2>/dev/null; then
+        local numpy_version
+        numpy_version=$(python -c "import numpy; print(numpy.__version__)" 2>/dev/null)
+        print_message "success" "numpy version $numpy_version est installé"
+        
+        # Vérifier si la version est compatible
+        if [[ "$numpy_version" != 1.* ]]; then
+            print_message "error" "Version de numpy incompatible. Version 1.x requise."
+            print_message "info" "Correction: pip install 'numpy<2.0' --force-reinstall"
+        fi
+    else
+        print_message "error" "numpy n'est pas installé ou importable"
+    fi
+    
+    # Vérifier whisper
+    if python -c "import whisper" 2>/dev/null; then
+        print_message "success" "whisper est installé et importable"
+    else
+        print_message "warning" "whisper n'est pas installé ou importable"
+    fi
+}
+
+
+# Vérifier les conflits de packages
+check_package_conflicts() {
+    print_message "info" "Analyse des conflits de packages..."
+    
+    # Lister tous les packages installés avec leurs dépendances
+    pip freeze > "$SCRIPT_DIR/pip_freeze.txt"
+    print_message "info" "Liste des packages installés sauvegardée dans pip_freeze.txt"
+    
+    # Vérifier les conflits connus
+    if grep -q "torch==1." "$SCRIPT_DIR/pip_freeze.txt" && python -c "import sys; sys.exit(0 if sys.version_info.minor >= 10 else 1)" 2>/dev/null; then
+        print_message "warning" "Possible conflit: torch 1.x avec Python 3.10+"
+        print_message "info" "Correction: pip install torch==2.0.0 --force-reinstall"
+    fi
+    
+    # Vérifier si asyncio est installé via pip (ce qui peut causer des problèmes)
+    if grep -q "asyncio==" "$SCRIPT_DIR/pip_freeze.txt"; then
+        print_message "warning" "asyncio est installé via pip, ce qui peut causer des conflits"
+        print_message "info" "asyncio est un module standard de Python et ne devrait pas être installé via pip"
+        print_message "info" "Correction: pip uninstall -y asyncio"
+    fi
+}
+
+# Vérifier les moteurs de reconnaissance vocale
+check_speech_recognition_engines() {
+    print_message "info" "Vérification des moteurs de reconnaissance vocale..."
+    
+    local engines_available=false
+    
+    # Vérifier Whisper
+    if python -c "import whisper" 2>/dev/null; then
+        engines_available=true
+        print_message "success" "Whisper (OpenAI) est disponible"
+    fi
+    
+    # Vérifier Vosk
+    if python -c "import vosk" 2>/dev/null; then
+        engines_available=true
+        print_message "success" "Vosk est disponible"
+    fi
+    
+    # Vérifier Wav2Vec2
+    if python -c "import transformers, torch, torchaudio, soundfile" 2>/dev/null; then
+        engines_available=true
+        print_message "success" "Wav2Vec2 (Meta) est disponible"
+    fi
+    
+    if [[ "$engines_available" == false ]]; then
+        print_message "error" "Aucun moteur de reconnaissance vocale n'est disponible."
+        print_message "info" "Veuillez installer l'un des moteurs suivants:"
+        print_message "info" "  - Whisper (OpenAI): pip install openai-whisper torch"
+        print_message "info" "  - Vosk: pip install vosk"
+        print_message "info" "  - Wav2Vec2 (Meta): pip install transformers torch torchaudio soundfile"
+    fi
+}
+
+# Vérifier les problèmes spécifiques à macOS
+check_macos_specific_issues() {
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        print_message "info" "Vérification des problèmes spécifiques à macOS..."
+        
+        # Vérifier si Homebrew est installé
+        if command -v brew >/dev/null 2>&1; then
+            print_message "success" "Homebrew est installé"
+            
+            # Vérifier si portaudio est installé
+            if brew list portaudio >/dev/null 2>&1; then
+                print_message "success" "portaudio est installé via Homebrew"
+            else
+                print_message "warning" "portaudio n'est pas installé via Homebrew"
+                print_message "info" "Correction: brew install portaudio"
+            fi
+        else
+            print_message "warning" "Homebrew n'est pas installé"
+            print_message "info" "Homebrew est recommandé pour installer les dépendances système sur macOS"
+            print_message "info" "Installation: /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
+        fi
+        
+        # Vérifier les problèmes de PYTHONPATH
+        if [[ -z "${PYTHONPATH:-}" ]]; then
+            print_message "warning" "PYTHONPATH n'est pas défini"
+            print_message "info" "Cela peut causer des problèmes d'importation de modules"
+            
+            # Suggérer une correction
+            local site_packages
+            site_packages=$(python -c "import site; print(site.getsitepackages()[0])" 2>/dev/null)
+            if [[ -n "$site_packages" ]]; then
+                print_message "info" "Correction: export PYTHONPATH=\"$site_packages:\$PYTHONPATH\""
+            fi
+        else
+            print_message "success" "PYTHONPATH est défini: $PYTHONPATH"
+        fi
+    fi
+}
+
+# Fonction pour corriger les problèmes courants
+fix_common_issues() {
+    print_message "info" "Tentative de correction des problèmes courants..."
+    
+    # Désinstaller asyncio si installé via pip
+    if grep -q "asyncio==" "$SCRIPT_DIR/pip_freeze.txt"; then
+        print_message "info" "Désinstallation d'asyncio installé via pip..."
+        pip uninstall -y asyncio
+    fi
+    
+    # Forcer l'installation de numpy 1.x
+    print_message "info" "Installation de numpy 1.x..."
+    pip install "numpy<2.0" --force-reinstall
+    
+    # Corriger les problèmes de torch avec Python 3.10+
+    if python -c "import sys; sys.exit(0 if sys.version_info.minor >= 10 else 1)" 2>/dev/null; then
+        print_message "info" "Installation de torch 2.0.0 pour Python 3.10+..."
+        pip install torch==2.0.0 --force-reinstall
+    fi
+    
+    # Créer un fichier .pth pour ajouter le site-packages au PYTHONPATH
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        local site_packages
+        site_packages=$(python -c "import site; print(site.getsitepackages()[0])" 2>/dev/null)
+        local pth_file="$site_packages/peer_pythonpath.pth"
+        
+        print_message "info" "Création d'un fichier .pth pour corriger les problèmes de PYTHONPATH..."
+        echo "$site_packages" > "$pth_file"
+        print_message "success" "Fichier .pth créé: $pth_file"
+    fi
+    
+    print_message "success" "Corrections appliquées. Veuillez redémarrer votre terminal et réessayer."
 }
 
 # Fonction pour vérifier la version de Python
@@ -99,6 +331,41 @@ check_python_version() {
             echo ""
         fi
     fi
+}
+
+
+# Fonction pour corriger les problèmes courants
+fix_common_issues() {
+    print_message "info" "Tentative de correction des problèmes courants..."
+    
+    # Désinstaller asyncio si installé via pip
+    if grep -q "asyncio==" "$SCRIPT_DIR/pip_freeze.txt"; then
+        print_message "info" "Désinstallation d'asyncio installé via pip..."
+        pip uninstall -y asyncio
+    fi
+    
+    # Forcer l'installation de numpy 1.x
+    print_message "info" "Installation de numpy 1.x..."
+    pip install "numpy<2.0" --force-reinstall
+    
+    # Corriger les problèmes de torch avec Python 3.10+
+    if python -c "import sys; sys.exit(0 if sys.version_info.minor >= 10 else 1)" 2>/dev/null; then
+        print_message "info" "Installation de torch 2.2.2 pour Python 3.10+..."
+        pip install torch==2.2.2 --force-reinstall
+    fi
+    
+    # Créer un fichier .pth pour ajouter le site-packages au PYTHONPATH
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        local site_packages
+        site_packages=$(python -c "import site; print(site.getsitepackages()[0])" 2>/dev/null)
+        local pth_file="$site_packages/peer_pythonpath.pth"
+        
+        print_message "info" "Création d'un fichier .pth pour corriger les problèmes de PYTHONPATH..."
+        echo "$site_packages" > "$pth_file"
+        print_message "success" "Fichier .pth créé: $pth_file"
+    fi
+    
+    print_message "success" "Corrections appliquées. Veuillez redémarrer votre terminal et réessayer."
 }
 
 # Fonction pour vérifier l'installation de Whisper
@@ -417,7 +684,6 @@ generate_report() {
     echo ""
     echo "======================= RAPPORT DE DIAGNOSTIC ======================="
     echo ""
-    
     # Informations système
     echo "Système: $(uname -s) $(uname -r)"
     if [[ "$OSTYPE" == "darwin"* ]]; then
@@ -475,12 +741,25 @@ main() {
     
     # Vérifier l'environnement virtuel
     check_venv
-    echo ""
-    
+    if [ $? -ne 0 ]; then
+        check_venv_activated
+    fi
+
     # Vérifier la version de Python
     check_python_version
     echo ""
+     # Vérifier les dépendances problématiques
+    check_problematic_dependencies
     
+    # Vérifier les conflits de packages
+    check_package_conflicts
+    
+    # Vérifier les moteurs de reconnaissance vocale
+    check_speech_recognition_engines
+    
+    # Vérifier les problèmes spécifiques à macOS
+    check_macos_specific_issues
+    echo ""   
     # Vérifier les installations
     check_whisper
     echo ""
