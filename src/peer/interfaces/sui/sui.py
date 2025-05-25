@@ -961,3 +961,244 @@ class OmniscientSUI:
             
         except:
             return 0.7  # Qualité par défaut
+    
+    def _intelligent_command_loop(self):
+        """Boucle de traitement intelligent des commandes vocales reconnues."""
+        self.logger.info("🧠 Boucle de traitement des commandes démarrée...")
+        while self.running:
+            try:
+                try:
+                    speech_text = self.command_queue.get(timeout=1.0)
+                except queue.Empty:
+                    continue
+                if not speech_text or not speech_text.strip():
+                    continue
+                self._process_speech_command(speech_text)
+                self.command_queue.task_done()
+            except Exception as e:
+                self.logger.error(f"Erreur dans la boucle de commandes: {e}")
+
+    def _process_speech_command(self, speech_text: str):
+        """Traite une commande vocale reconnue et transmet au daemon IA."""
+        self.logger.info(f"Traitement de la commande vocale: {speech_text}")
+        start_time = time.time()
+        try:
+            # Traduire la commande vocale en requête standardisée enrichie
+            request = self.adapter.translate_to_core(speech_text)
+            request.session_id = self.session_id
+
+            # Exécuter via le daemon (agent IA)
+            response = self.daemon.execute_command(request)
+
+            # Traduire la réponse pour l'interface vocale
+            adapted_response = self.adapter.translate_from_core(response)
+
+            # Vocaliser la réponse
+            if adapted_response.get("should_vocalize", True):
+                vocal_message = adapted_response.get("vocal_message", "Commande exécutée.")
+                self.vocalize(vocal_message)
+
+            # Suggestions proactives
+            suggestions = adapted_response.get("proactive_suggestions", [])
+            if suggestions:
+                for suggestion in suggestions:
+                    self.vocalize(suggestion)
+
+            # Mise à jour des métriques
+            elapsed = time.time() - start_time
+            self.avg_response_time = (self.avg_response_time * self.total_commands + elapsed) / (self.total_commands + 1)
+            self.total_commands += 1
+
+        except Exception as e:
+            self.logger.error(f"Erreur lors du traitement de la commande vocale: {e}")
+            self.vocalize("Désolé, je n'ai pas pu traiter votre demande.")
+
+    def vocalize(self, text: str):
+        """Synthétise et joue un texte avec gestion intelligente des interruptions."""
+        if not text or not text.strip():
+            return
+        with self.tts_lock:
+            self.speaking = True
+            try:
+                self.logger.info(f"Vocalisation: {text}")
+                self.tts_adapter.speak(text)
+            except Exception as e:
+                self.logger.error(f"Erreur lors de la vocalisation: {e}")
+                print(f"[TTS Error] {text}")
+            finally:
+                self.speaking = False
+
+    def _update_performance_metrics(self, recognition_result: SpeechRecognitionResult):
+        """Met à jour les métriques de performance et d'apprentissage."""
+        self.performance_metrics["response_time"] = recognition_result.processing_time
+        self.performance_metrics["recognition_confidence"] = recognition_result.confidence
+        self.performance_metrics["audio_quality"] = recognition_result.audio_quality
+        self.command_history.append(recognition_result.text)
+
+    def _analyze_current_context(self) -> ContextualInfo:
+        """Analyse le contexte courant pour l'assistance intelligente."""
+        return ContextualInfo(
+            current_time=datetime.datetime.now(),
+            session_duration=time.time() - self.session_start_time,
+            commands_count=len(self.command_history),
+            last_commands=list(self.command_history)[-5:],
+            user_response_pattern={},  # À enrichir selon l'apprentissage
+            system_performance={
+                "cpu": psutil.cpu_percent(),
+                "memory": psutil.virtual_memory().percent,
+                "disk": psutil.disk_usage("/").percent
+            },
+            recent_errors=[],
+            working_directory=os.getcwd(),
+            active_files=[]
+        )
+
+    def _provide_proactive_assistance(self, context: ContextualInfo):
+        """Fournit une assistance proactive basée sur le contexte."""
+        # Exemple : proposer un tutoriel si beaucoup d'erreurs ou d'hésitations
+        if context.commands_count > 3 and any("aide" in cmd.lower() for cmd in context.last_commands):
+            self.vocalize("Je remarque que vous demandez souvent de l'aide. Voulez-vous un tutoriel interactif ou une explication détaillée ?")
+
+    def _adapt_to_user_patterns(self):
+        """Adapte le comportement selon les patterns utilisateur."""
+        # À enrichir : analyse des habitudes pour personnaliser l'expérience
+        pass
+
+    def _generate_personalized_greeting(self) -> str:
+        """Génère un message d'accueil personnalisé selon le contexte."""
+        hour = datetime.datetime.now().hour
+        if hour < 12:
+            return "Bonjour, prêt à coder ! Comment puis-je vous aider ?"
+        elif hour < 18:
+            return "Bon après-midi, que souhaitez-vous accomplir aujourd'hui ?"
+        else:
+            return "Bonsoir, besoin d'aide pour avancer sur votre projet ?"
+
+    def _generate_personalized_farewell(self) -> str:
+        """Génère un message de fin personnalisé."""
+        return "Interface vocale Peer arrêtée. À bientôt et bon codage !"
+
+    def _monitor_system_health(self):
+        """Surveille la santé du système et ajuste le comportement si besoin."""
+        # Exemple : si CPU > 90%, prévenir l'utilisateur
+        cpu = psutil.cpu_percent()
+        if cpu > 90:
+            self.vocalize("Attention, l'utilisation du processeur est très élevée.")
+
+    def _save_user_preferences(self):
+        """Sauvegarde les préférences utilisateur via l'adaptateur."""
+        self.adapter._save_user_preferences()
+
+    def _load_user_preferences(self):
+        """Charge les préférences utilisateur via l'adaptateur."""
+        self.adapter._load_user_preferences()
+
+
+def main():
+    """
+    Point d'entrée principal pour lancer l'interface vocale omnisciente SUI.
+    
+    Cette fonction initialise et démarre l'interface vocale avec toutes ses capacités
+    d'intelligence artificielle avancées:
+    - Détection d'activité vocale (VAD)
+    - Reconnaissance Whisper optimisée
+    - Analyse contextuelle et assistance proactive
+    - Apprentissage adaptatif
+    - Intégration complète avec le daemon IA
+    """
+    print("=" * 60)
+    print("🎤 Interface Vocale Omnisciente SUI - Peer AI Assistant")
+    print("=" * 60)
+    print("Initialisation de l'interface vocale avancée...")
+    
+    # Configuration du logging pour l'exécution standalone
+    logger = logging.getLogger("SUI-Main")
+    
+    try:
+        # Création du répertoire de configuration si nécessaire
+        config_dir = Path.home() / ".peer"
+        config_dir.mkdir(exist_ok=True)
+        
+        logger.info("Démarrage de l'interface vocale omnisciente SUI")
+        
+        # Initialisation de l'interface SUI
+        sui = OmniscientSUI()
+        
+        print("✅ Interface vocale initialisée avec succès !")
+        print("\n📋 Fonctionnalités disponibles:")
+        print("  • Reconnaissance vocale en continu avec Whisper")
+        print("  • Détection d'activité vocale avancée (WebRTC VAD)")
+        print("  • Commandes SUI directes (volume, vitesse, pause)")
+        print("  • Transmission intelligente des requêtes au daemon IA")
+        print("  • Analyse contextuelle et assistance proactive")
+        print("  • Apprentissage adaptatif des préférences utilisateur")
+        print("  • Synthèse vocale avec gestion des interruptions")
+        
+        print("\n🎯 Commandes SUI directes disponibles:")
+        print("  • 'volume haut/bas' - Ajuster le volume")
+        print("  • 'vitesse normale/lente/rapide' - Ajuster la vitesse de parole")
+        print("  • 'répète' - Répéter la dernière réponse")
+        print("  • 'pause/arrêt' - Mettre en pause ou arrêter")
+        print("  • 'aide' - Obtenir de l'aide")
+        
+        print("\n🤖 Toutes les autres requêtes seront transmises au daemon IA pour:")
+        print("  • Génération et modification de code")
+        print("  • Analyse de projets et debugging")
+        print("  • Assistance technique avancée")
+        print("  • Gestion de fichiers et configurations")
+        
+        print("\n🎤 Dites 'Peer' ou commencez à parler...")
+        print("   Appuyez sur Ctrl+C pour arrêter l'interface")
+        print("=" * 60)
+        
+        # Démarrage de l'interface vocale
+        sui.start()
+        
+        # Boucle principale - maintient l'interface active
+        try:
+            while sui.listening:
+                time.sleep(0.5)
+                # Vérification périodique de la santé du système
+                sui._monitor_system_health()
+        except KeyboardInterrupt:
+            print("\n\n🛑 Arrêt demandé par l'utilisateur...")
+            logger.info("Arrêt de l'interface vocale sur demande utilisateur")
+        
+    except Exception as e:
+        logger.error(f"Erreur critique lors du démarrage de SUI: {e}")
+        print(f"\n❌ Erreur critique: {e}")
+        print("\n🔧 Suggestions de dépannage:")
+        print("  1. Vérifiez que votre microphone est connecté et fonctionnel")
+        print("  2. Assurez-vous que les dépendances audio sont installées:")
+        print("     pip install pyaudio numpy pyttsx3 openai-whisper webrtcvad")
+        print("  3. Vérifiez les permissions d'accès au microphone")
+        print("  4. Consultez les logs détaillés dans ~/.peer/sui.log")
+        return 1
+    
+    finally:
+        # Nettoyage et fermeture propre
+        try:
+            if 'sui' in locals():
+                print("🔄 Arrêt de l'interface vocale...")
+                sui.stop()
+                print("✅ Interface vocale arrêtée proprement")
+            logger.info("Interface vocale SUI fermée")
+        except Exception as e:
+            logger.error(f"Erreur lors de la fermeture: {e}")
+            print(f"⚠️  Erreur lors de la fermeture: {e}")
+    
+    print("👋 Au revoir et bon codage !")
+    return 0
+
+
+if __name__ == "__main__":
+    """
+    Lancement direct du script SUI.
+    
+    Usage:
+        python -m peer.interfaces.sui.sui
+        ou
+        python /path/to/sui.py
+    """
+    exit_code = main()
+    sys.exit(exit_code)
