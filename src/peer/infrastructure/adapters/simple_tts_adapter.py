@@ -111,7 +111,7 @@ if __name__ == "__main__":
                     python_executable = sys.executable
                     subprocess.run([python_executable, script_path, text], 
                                   check=True, 
-                                  timeout=10)  # Timeout de 10 secondes pour éviter les blocages
+                                  timeout=60)  # Timeout de 60 secondes pour les messages longs
                     self.logger.info(f"Texte vocalisé: {text[:50]}...")
                 except subprocess.SubprocessError as e:
                     self.logger.error(f"Erreur lors de l'exécution du processus TTS: {e}")

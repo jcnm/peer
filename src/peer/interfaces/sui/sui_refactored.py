@@ -183,8 +183,8 @@ Vous pouvez parler naturellement, l'interface comprendra vos intentions."""
                         return CommandType.ECHO, {"args": parts[1].strip().split()}
             return CommandType.ECHO, {}
         
-        # Commande inconnue - utiliser QUERY pour analyse générale
-        return CommandType.QUERY, {"args": normalized_input.split()}
+        # Commande inconnue - utiliser PROMPT pour l'entrée utilisateur non reconnue
+        return CommandType.PROMPT, {"args": normalized_input.split(), "full_text": normalized_input}
     
     def _adapt_message_for_speech(self, message: str) -> str:
         """Adapte un message pour la synthèse vocale"""
