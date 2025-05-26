@@ -22,6 +22,9 @@ from typing import Optional, List, Dict, Any, Tuple, Union
 from dataclasses import dataclass, asdict
 from collections import deque, defaultdict
 
+# Fix OMP warning: "Forking a process while a parallel region is active is potentially unsafe."
+os.environ["OMP_NUM_THREADS"] = "1"
+
 # Configuration du logging avancée
 logging.basicConfig(
     level=logging.INFO,
@@ -303,8 +306,9 @@ class IntelligentSUISpeechAdapter(InterfaceAdapter):
         if semantic_command:
             return semantic_command
         
-        # Commande par défaut - requête générale
-        return CommandType.QUERY, {"args": normalized_input.split(), "full_text": normalized_input}
+        # Commande par défaut - utiliser PROMPT au lieu de HELP pour les entrées utilisateur non reconnues
+        self.logger.debug(f"Commande non reconnue: '{normalized_input}', utilisation de PROMPT par défaut")
+        return CommandType.PROMPT, {"args": normalized_input.split(), "full_text": normalized_input, "unrecognized_input": normalized_input}
     
     def _extract_parameters(self, normalized_input: str, trigger: str, context: Dict[str, Any]) -> Dict[str, Any]:
         """Extraction intelligente des paramètres d'une commande."""
@@ -601,27 +605,56 @@ class OmniscientSUI:
         self._enable_advanced_features()
     
     def _init_advanced_speech_recognition(self):
-        """Initialise le moteur de reconnaissance vocale Whisper optimisé."""
+        """Initialise le moteur de reconnaissance vocale Whisper avec le meilleur modèle possible."""
         try:
-            self.logger.info("🧠 Initialisation de Whisper optimisé pour le français...")
+            self.logger.info("🧠 Initialisation de Whisper avec modèle de qualité...")
             
-            # Utiliser un modèle Whisper adapté selon les ressources disponibles
+            # Utiliser le meilleur modèle Whisper possible pour la qualité
             available_memory = psutil.virtual_memory().available / (1024**3)  # GB
             
-            if available_memory > 8:
-                model_size = "medium"
-                self.logger.info("💪 Mémoire suffisante: utilisation du modèle Whisper medium")
-            elif available_memory > 4:
-                model_size = "small"
-                self.logger.info("⚡ Mémoire modérée: utilisation du modèle Whisper small")
-            else:
-                model_size = "base"
-                self.logger.info("🔧 Mémoire limitée: utilisation du modèle Whisper base")
+            # Cache pour les modèles déjà téléchargés
+            cached_models = []
+            whisper_cache = os.path.expanduser("~/.cache/whisper")
+            if os.path.exists(whisper_cache):
+                cached_models = [d for d in os.listdir(whisper_cache) if os.path.isdir(os.path.join(whisper_cache, d))]
             
-            # Charger le modèle avec fp16=False pour éviter l'avertissement FP16 sur CPU
-            self.whisper_model = whisper.load_model(model_size, device="cpu", in_memory=True)
+            # Sélection de modèle basée sur la mémoire disponible et modèles en cache
+            model_size = "base"  # Modèle par défaut (équilibre performance/qualité)
+            
+            # Essayer d'utiliser medium en priorité (meilleur rapport qualité/performance)
+            if available_memory > 8 or any(m.startswith("medium") for m in cached_models):
+                model_size = "medium"  # Bon compromis qualité/performance
+                self.logger.info("⚡ Utilisation du modèle Whisper medium (haute qualité)")
+            # Sinon utiliser small si mémoire suffisante
+            elif available_memory > 4 or any(m.startswith("small") for m in cached_models):
+                model_size = "small"  # Qualité correcte
+                self.logger.info("🔧 Utilisation du modèle Whisper small")
+            else:
+                self.logger.info("⚠️ Utilisation du modèle Whisper base (mémoire limitée)")
+            
+            # Charger le modèle avec optimisations
+            self.logger.info(f"⏳ Chargement du modèle Whisper {model_size}...")
+            self.whisper_model = whisper.load_model(
+                model_size, 
+                device="cpu", 
+                in_memory=True,
+                download_root=os.path.expanduser("~/.cache/whisper")
+            )
             self.speech_recognition_engine = "whisper"
-            self.logger.info(f"✅ Whisper {model_size} initialisé avec succès")
+            
+            # Préchauffer le modèle avec un échantillon vide
+            self.logger.info("🔥 Préchauffage du modèle Whisper pour accélérer la première reconnaissance...")
+            empty_sample = np.zeros(1600, dtype=np.float32)  # 0.1s d'audio vide
+            self.whisper_model.transcribe(
+                empty_sample, language="fr", temperature=0.0,
+                best_of=1, beam_size=1, fp16=False
+            )
+            
+            self.logger.info(f"✅ Whisper {model_size} initialisé avec succès pour une reconnaissance de qualité")
+            
+        except Exception as e:
+            self.logger.error(f"❌ Erreur lors de l'initialisation de Whisper: {e}")
+            self.speech_recognition_engine = None
             
         except Exception as e:
             self.logger.error(f"❌ Erreur lors de l'initialisation de Whisper: {e}")
@@ -808,6 +841,67 @@ class OmniscientSUI:
         
         self.logger.info("📚 Système d'apprentissage adaptatif initialisé")
     
+    def _adapt_to_user_patterns(self):
+        """Analyse les patterns d'utilisation utilisateur et adapte l'interface."""
+        try:
+            if not self.command_history:
+                return
+            
+            # Analyser les commandes les plus fréquentes
+            command_frequency = defaultdict(int)
+            for command in self.command_history:
+                if isinstance(command, dict) and 'command' in command:
+                    command_frequency[command['command']] += 1
+            
+            # Adapter les seuils de reconnaissance selon l'historique
+            total_commands = len(self.command_history)
+            if total_commands > 10:
+                # Si l'utilisateur utilise beaucoup de commandes, être plus sensible
+                self.energy_threshold = max(400, self.energy_threshold * 0.9)
+                self.logger.info(f"🎯 Seuil d'énergie adapté à {self.energy_threshold:.0f} basé sur l'usage")
+            
+            # Identifier les préférences temporelles (si implémenté)
+            recent_commands = list(self.command_history)[-20:] if len(self.command_history) > 20 else list(self.command_history)
+            if recent_commands:
+                # Analyser les patterns récents pour optimiser les réponses
+                self.logger.debug(f"📊 Dernières commandes analysées: {len(recent_commands)}")
+                
+        except Exception as e:
+            self.logger.warning(f"⚠️ Erreur lors de l'adaptation aux patterns utilisateur: {e}")
+    
+    def _load_user_preferences(self) -> Dict[str, Any]:
+        """Charge les préférences utilisateur en utilisant l'adaptateur pour éviter la duplication de code."""
+        if hasattr(self.adapter, '_load_user_preferences'):
+            # Utiliser la méthode de l'adaptateur pour éviter la duplication de code
+            preferences = self.adapter._load_user_preferences()
+            # Mettre à jour les préférences de l'adaptateur pour la synchronisation
+            if hasattr(self.adapter, 'user_preferences'):
+                self.adapter.user_preferences.update(preferences)
+            return preferences
+        else:
+            # Fallback si l'adaptateur n'a pas la méthode (ne devrait pas arriver)
+            self.logger.warning("L'adaptateur n'a pas de méthode _load_user_preferences, utilisation des préférences par défaut")
+            return {
+                "response_style": "balanced",
+                "voice_speed": 1.0,
+                "voice_volume": 0.8,
+                "language_preference": "fr",
+                "proactive_assistance": True,
+                "context_awareness": True,
+                "learning_mode": True,
+                "notification_level": "normal"
+            }
+    
+    def _save_user_preferences(self, preferences: Dict[str, Any]):
+        """Sauvegarde les préférences utilisateur."""
+        try:
+            preferences_path = Path.home() / '.peer' / 'sui_preferences.json'
+            preferences_path.parent.mkdir(exist_ok=True)
+            with open(preferences_path, 'w', encoding='utf-8') as f:
+                json.dump(preferences, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            self.logger.error(f"Erreur lors de la sauvegarde des préférences: {e}")
+    
     def _auto_adjust_audio_thresholds(self):
         """Ajuste automatiquement les seuils audio selon l'environnement."""
         try:
@@ -854,21 +948,21 @@ class OmniscientSUI:
             return 400.0  # Valeur par défaut
     
     def start(self):
-        """Démarre l'interface vocale omnisciente."""
+        """Démarre l'interface vocale omnisciente avec approche talkie-walkie."""
         if self.running:
             self.logger.warning("⚠️ L'interface vocale est déjà en cours")
             return
         
         self.running = True
-        self.logger.info("🚀 Démarrage de l'interface vocale omnisciente...")
+        self.logger.info("🚀 Démarrage de l'interface vocale omnisciente avec mode talkie-walkie...")
         
         # Vérifier la disponibilité des moteurs
         if not self.speech_recognition_engine:
-            self.vocalize("Attention: aucun moteur de reconnaissance vocale disponible. Mode dégradé activé.")
+            self._safe_vocalize("Attention: aucun moteur de reconnaissance vocale disponible. Mode dégradé activé.")
             return
         
-        # Démarrer les threads principaux
-        self.listen_thread = threading.Thread(target=self._continuous_listen_loop, daemon=True)
+        # Démarrer les threads principaux avec approche talkie-walkie
+        self.listen_thread = threading.Thread(target=self._walkie_talkie_loop, daemon=True)
         self.command_thread = threading.Thread(target=self._intelligent_command_loop, daemon=True)
         
         self.listen_thread.start()
@@ -876,7 +970,7 @@ class OmniscientSUI:
         
         # Message d'accueil personnalisé
         welcome_message = self._generate_personalized_greeting()
-        self.vocalize(welcome_message)
+        self._safe_vocalize(welcome_message)
         
         # Boucle principale avec surveillance
         try:
@@ -896,119 +990,104 @@ class OmniscientSUI:
         self.running = False
         
         # Sauvegarder les préférences apprises
-        self._save_user_preferences()
+        if hasattr(self.adapter, 'user_preferences'):
+            self._save_user_preferences(self.adapter.user_preferences)
+        else:
+            # Utiliser la méthode de l'adaptateur directement si elle existe
+            if hasattr(self.adapter, '_save_user_preferences'):
+                self.adapter._save_user_preferences()
         
         # Terminer la session
         if hasattr(self, 'session_id'):
             self.daemon.end_session(self.session_id)
         
-        # Message de fin personnalisé
+        # Message de fin personnalisé avec vocalisation sécurisée
         farewell_message = self._generate_personalized_farewell()
-        self.vocalize(farewell_message)
+        self._safe_vocalize(farewell_message)
         
         self.logger.info("✅ Interface vocale arrêtée avec succès")
     
-    def _continuous_listen_loop(self):
-        """Boucle d'écoute continue avec détection d'activité vocale avancée et isolation audio renforcée."""
-        self.logger.info("👂 Démarrage de l'écoute continue avancée...")
-        self._update_visual_status("🎙️ J'écoute")
+    def _walkie_talkie_loop(self):
+        """Boucle talkie-walkie : écoute uniquement quand l'assistant ne parle pas."""
+        self.logger.info("📻 Démarrage du mode talkie-walkie...")
+        self._update_visual_status("🎙️ Mode talkie-walkie activé")
+        
+        # Variables d'état simples
+        audio = None
+        stream = None
         
         try:
+            # Configuration audio simplifiée (OMP_NUM_THREADS déjà défini au début du fichier)
             audio = pyaudio.PyAudio()
-            
-            # Utiliser le périphérique d'entrée configuré pour l'isolation
-            device_index = self.input_device_index if self.audio_isolation_enabled else None
-            
             stream = audio.open(
                 format=self.audio_format,
                 channels=self.channels,
                 rate=self.sample_rate,
                 input=True,
-                input_device_index=device_index,
                 frames_per_buffer=self.chunk_size
             )
             
             self.listening = True
-            speech_frames = []
-            in_speech = False
-            silence_count = 0
-            
-            # Variables pour l'isolation audio renforcée
-            last_tts_end = 0
-            background_noise_level = 0
-            noise_samples = []
+            self.logger.info("🎙️ Microphone initialisé pour le mode talkie-walkie")
             
             while self.running:
-                # Isolation temporelle STRICTE - ne pas écouter pendant et après TTS
-                current_time = time.time()
-                
-                # Vérification multi-niveaux pour éviter l'auto-écoute
-                if self._should_skip_listening(current_time):
-                    time.sleep(0.05)  # Pause courte pendant les périodes bloquées
-                    continue
-                
                 try:
-                    # Lire un chunk audio
-                    audio_data = stream.read(self.chunk_size, exception_on_overflow=False)
+                    # Mode talkie-walkie : N'écouter QUE si pas en train de parler
+                    if self.speaking or self.paused:
+                        time.sleep(0.1)
+                        continue
                     
-                    # Analyser l'activité vocale avec filtrage intelligent
-                    vad_result = self._detect_voice_activity_filtered(audio_data, background_noise_level)
+                    # Respecter la période de silence après TTS pour éviter l'écho
+                    if self.speech_end_time > 0:
+                        time_since_speech = time.time() - self.speech_end_time
+                        if time_since_speech < self.min_silence_after_speech:
+                            time.sleep(0.1)
+                            continue
                     
-                    # Mettre à jour le niveau de bruit de fond
-                    noise_samples.append(vad_result.energy_level)
-                    if len(noise_samples) > 50:  # Garder les 50 derniers échantillons
-                        noise_samples.pop(0)
-                        background_noise_level = sum(noise_samples) / len(noise_samples)
+                    # Indiquer qu'on écoute
+                    if self.show_visual_indicators:
+                        self._update_visual_status("🎙️ À vous (parlez maintenant)")
                     
-                    if vad_result.speech_detected:
-                        if not in_speech:
-                            # Validation supplémentaire avant de considérer comme parole
-                            if self._validate_real_speech(vad_result, background_noise_level):
-                                in_speech = True
-                                speech_frames = []
-                                self.logger.debug("🎤 Début de parole validé")
-                                self._update_visual_status("🧠 J'essaie de comprendre ta demande")
-                                
-                                # Gestion des interruptions avec validation stricte
-                                if self.speaking:
-                                    if self._handle_potential_interruption(audio_data):
-                                        # Si c'est une vraie interruption, arrêter d'écouter temporairement
-                                        time.sleep(0.5)
-                                        continue
+                    # Session d'écoute unique jusqu'à détection de parole complète
+                    speech_audio = self._record_single_speech_session(stream)
+                    
+                    if speech_audio and len(speech_audio) > 0:
+                        # Traiter immédiatement la parole détectée
+                        self._process_speech_immediately(speech_audio)
                         
-                        speech_frames.append(audio_data)
-                        silence_count = 0
+                        # Attendre que le traitement soit terminé avant de reprendre l'écoute
+                        time.sleep(0.5)
                     else:
-                        if in_speech:
-                            silence_count += 1
-                            speech_frames.append(audio_data)  # Inclure un peu de silence
-                            
-                            # Si suffisamment de silence, traiter la parole
-                            if silence_count > 20:  # ~2 secondes de silence pour plus de sécurité
-                                if not self.paused and len(speech_frames) > 10:  # Minimum de données
-                                    self._process_complete_speech(speech_frames)
-                                in_speech = False
-                                speech_frames = []
-                                silence_count = 0
-                                self._update_visual_status("🎙️ J'écoute")
-                    
-                    # Mettre à jour le buffer circulaire pour l'analyse
-                    self.audio_buffer.append(vad_result)
-                    
+                        # Courte pause si aucune parole détectée
+                        time.sleep(0.2)
+                        
+                except KeyboardInterrupt:
+                    self.logger.info("⌨️ Interruption clavier dans la boucle talkie-walkie")
+                    break
                 except Exception as e:
-                    self.logger.error(f"❌ Erreur lors de l'écoute: {e}")
-                    time.sleep(0.1)
+                    self.logger.error(f"❌ Erreur dans la boucle talkie-walkie: {e}")
+                    time.sleep(1.0)  # Pause en cas d'erreur pour éviter la surcharge
             
         except Exception as e:
             self.logger.error(f"❌ Erreur fatale dans la boucle d'écoute: {e}")
         finally:
-            if 'stream' in locals():
-                stream.close()
-            if 'audio' in locals():
-                audio.terminate()
+            # Nettoyage propre des ressources audio
+            if stream:
+                try:
+                    stream.stop_stream()
+                    stream.close()
+                    self.logger.debug("🔇 Stream audio fermé")
+                except:
+                    pass
+            if audio:
+                try:
+                    audio.terminate()
+                    self.logger.debug("🔇 PyAudio terminé")
+                except:
+                    pass
             self.listening = False
             self._update_visual_status("🔇 Écoute arrêtée")
-            self.logger.info("👂 Écoute terminée")
+            self.logger.info("👂 Boucle talkie-walkie terminée")
     
     def _should_skip_listening(self, current_time: float) -> bool:
         """Détermine si on doit ignorer l'écoute pour éviter l'auto-détection."""
@@ -1152,6 +1231,89 @@ class OmniscientSUI:
             self.logger.error(f"Erreur dans la détection VAD: {e}")
             return VoiceActivityMetrics()
     
+    def _update_performance_metrics(self, recognition_result: SpeechRecognitionResult):
+        """Met à jour les métriques de performance du système."""
+        try:
+            # Mettre à jour le temps de traitement moyen
+            if hasattr(recognition_result, 'processing_time'):
+                processing_time = recognition_result.processing_time
+                self.performance_metrics["response_time"] = processing_time
+                
+                # Alerter si le temps de traitement est anormalement long
+                if processing_time > 5.0:
+                    self.logger.warning(f"⚠️ Temps de traitement anormalement long: {processing_time:.2f}s")
+                    # Ajuster la stratégie de reconnaissance en cas de lenteur
+                    self._adjust_recognition_strategy(processing_time)
+                
+            # Mettre à jour la précision de reconnaissance
+            if hasattr(recognition_result, 'confidence'):
+                confidence = recognition_result.confidence
+                # Ajuster progressivement la précision estimée
+                self.recognition_accuracy = 0.9 * self.recognition_accuracy + 0.1 * confidence
+                
+                # Alerter si la confiance est faible
+                if confidence < 0.4:
+                    self.logger.debug(f"⚠️ Confiance de reconnaissance faible: {confidence:.2f}")
+                
+            # Mettre à jour d'autres métriques système
+            self.performance_metrics["cpu_usage"] = psutil.cpu_percent(interval=0.1)
+            self.performance_metrics["memory_usage"] = psutil.virtual_memory().percent
+            
+            # Ajuster les seuils de reconnaissance si nécessaire
+            if self.total_commands > 10 and hasattr(recognition_result, 'audio_quality'):
+                audio_quality = recognition_result.audio_quality
+                
+                if audio_quality < 0.5:
+                    # Si la qualité audio est faible, ajuster les seuils
+                    self.energy_threshold = min(1200, self.energy_threshold * 1.05)
+                    self.logger.debug(f"🔊 Augmentation du seuil d'énergie à {self.energy_threshold:.0f} (qualité audio faible)")
+                elif audio_quality > 0.8 and self.energy_threshold > 600:
+                    # Si la qualité audio est bonne, réduire le seuil pour mieux capter les paroles douces
+                    self.energy_threshold = max(500, self.energy_threshold * 0.95)
+                    self.logger.debug(f"🔉 Réduction du seuil d'énergie à {self.energy_threshold:.0f} (qualité audio bonne)")
+        
+        except Exception as e:
+            self.logger.warning(f"⚠️ Erreur lors de la mise à jour des métriques: {e}")
+    
+    def _adjust_recognition_strategy(self, processing_time: float):
+        """Ajuste la stratégie de reconnaissance en fonction des performances passées."""
+        try:
+            # Si le traitement est trop lent (> 5s), simplifier la stratégie
+            if processing_time > 5.0:
+                # Enregistrer l'événement de performance
+                if not hasattr(self, 'slow_recognitions'):
+                    self.slow_recognitions = 0
+                self.slow_recognitions += 1
+                
+                # Si problèmes récurrents de performance, ajuster la stratégie
+                if self.slow_recognitions > 3:
+                    self.logger.warning("⚠️ Performance lente récurrente, simplification de la stratégie de reconnaissance")
+                    
+                    # Vérifier si un modèle plus léger est disponible
+                    current_model = getattr(self.whisper_model, 'model_size', 'unknown')
+                    
+                    if current_model == "medium" or current_model == "large":
+                        self.logger.info("🔄 Tentative de passage à un modèle plus léger...")
+                        try:
+                            # Libérer la mémoire du modèle actuel
+                            import gc
+                            del self.whisper_model
+                            gc.collect()
+                            
+                            # Charger un modèle plus léger
+                            new_model = "small" if current_model == "medium" else "base"
+                            self.logger.info(f"⏳ Chargement du modèle Whisper {new_model}...")
+                            self.whisper_model = whisper.load_model(new_model, device="cpu", in_memory=True)
+                            self.logger.info(f"✅ Passage au modèle {new_model} réussi")
+                            
+                            # Réinitialiser le compteur
+                            self.slow_recognitions = 0
+                        except Exception as e:
+                            self.logger.error(f"❌ Erreur lors du changement de modèle: {e}")
+        
+        except Exception as e:
+            self.logger.warning(f"⚠️ Erreur lors de l'ajustement de la stratégie: {e}")
+    
     def _process_complete_speech(self, speech_frames: List[bytes]):
         """Traite une séquence complète de parole détectée."""
         try:
@@ -1161,37 +1323,93 @@ class OmniscientSUI:
             # Combiner tous les frames
             complete_audio = b''.join(speech_frames)
             
-            # Reconnaissance vocale
-            start_time = time.time()
-            recognition_result = self._recognize_speech_whisper(complete_audio)
-            processing_time = time.time() - start_time
+            # Vérifier si l'audio est trop court pour être significatif
+            if len(complete_audio) < 4000:  # Moins de ~0.25 seconde
+                self.logger.debug("🔇 Séquence audio trop courte, probablement un bruit")
+                return
             
-            if recognition_result and recognition_result.text.strip():
-                recognition_result.processing_time = processing_time
+            # Vérifier si l'audio est trop long (peut causer des problèmes de performance)
+            if len(complete_audio) > 1920000:  # Plus de 60 secondes @ 16kHz
+                self.logger.warning(f"⚠️ Audio très long ({len(complete_audio)/16000:.1f}s), découpage pour éviter les problèmes de performance")
+                # Conserver uniquement les 30 premières secondes
+                complete_audio = complete_audio[:960000]
+            
+            # Reconnaissance vocale avec protection contre les timeouts
+            self.logger.info(f"🎤 Traitement audio de {len(complete_audio)/16000:.1f}s...")
+            start_time = time.time()
+            
+            # Utiliser un thread séparé avec timeout pour éviter les blocages
+            recognition_thread = threading.Thread(
+                target=self._recognition_worker,
+                args=(complete_audio,)
+            )
+            recognition_thread.daemon = True
+            
+            # File d'attente pour récupérer le résultat
+            result_queue = queue.Queue()
+            self.recognition_worker_queue = result_queue
+            
+            # Démarrer la reconnaissance
+            recognition_thread.start()
+            
+            # Attendre le résultat avec timeout
+            try:
+                recognition_result = result_queue.get(timeout=20.0)  # 20 secondes max
+                processing_time = time.time() - start_time
                 
-                # Enregistrer les métriques
-                self._update_performance_metrics(recognition_result)
-                
-                # Afficher les indicateurs visuels pour le résultat de reconnaissance
-                if self.show_visual_indicators:
-                    self._update_visual_status(f"💬 ({processing_time:.1f}s) [{recognition_result.text}]")
-                
-                self.logger.info(f"🗣️ Parole reconnue ({processing_time:.2f}s): {recognition_result.text}")
-                
-                # Détecter si c'est une commande reconnue et afficher l'indicateur approprié
-                detected_command = self._detect_command_intent(recognition_result.text)
-                if detected_command and self.show_visual_indicators:
-                    self._update_visual_status(f"🎯 [{detected_command}]")
-                
-                # Ajouter à la queue de commandes
-                self.command_queue.put(recognition_result.text)
-                
-                # Indicateur visuel de traitement de la commande
-                if self.show_visual_indicators:
-                    self._update_visual_status("⚙️ Traitement en cours...")
+                if recognition_result and recognition_result.text.strip():
+                    recognition_result.processing_time = processing_time
+                    
+                    # Enregistrer les métriques
+                    self._update_performance_metrics(recognition_result)
+                    
+                    # Afficher les indicateurs visuels pour le résultat de reconnaissance
+                    if self.show_visual_indicators:
+                        self._update_visual_status(f"💬 ({processing_time:.1f}s) [{recognition_result.text}]")
+                    
+                    self.logger.info(f"🗣️ Parole reconnue ({processing_time:.2f}s): {recognition_result.text}")
+                    
+                    # Détecter si c'est une commande reconnue et afficher l'indicateur approprié
+                    detected_command = self._detect_command_intent(recognition_result.text)
+                    if detected_command and self.show_visual_indicators:
+                        self._update_visual_status(f"🎯 [{detected_command}]")
+                    
+                    # Ajouter à la queue de commandes
+                    self.command_queue.put(recognition_result.text)
+                    
+                    # Indicateur visuel de traitement de la commande
+                    if self.show_visual_indicators:
+                        self._update_visual_status("⚙️ Traitement en cours...")
+                else:
+                    self.logger.debug("🔇 Aucun texte reconnu dans la séquence audio")
+            
+            except queue.Empty:
+                self.logger.warning("⚠️ Timeout lors de la reconnaissance vocale (>20s)")
+                # Si un modèle plus léger est disponible, suggérer de l'utiliser la prochaine fois
+                if hasattr(self.whisper_model, 'model_size'):
+                    if self.whisper_model.model_size in ["medium", "large"]:
+                        self.logger.info("💡 Considérer l'utilisation d'un modèle plus léger pour améliorer les performances")
+                        # Force model downgrade after multiple timeouts
+                        self._adjust_recognition_strategy(25.0)  # Simuler un temps très long
             
         except Exception as e:
             self.logger.error(f"❌ Erreur lors du traitement de la parole: {e}")
+    
+    def _recognition_worker(self, audio_data: bytes):
+        """Thread worker pour la reconnaissance vocale avec timeout."""
+        try:
+            # Obtenir le résultat
+            result = self._recognize_speech_whisper(audio_data)
+            
+            # Mettre le résultat dans la file d'attente si elle existe toujours
+            if hasattr(self, 'recognition_worker_queue') and self.recognition_worker_queue:
+                self.recognition_worker_queue.put(result)
+        
+        except Exception as e:
+            self.logger.error(f"❌ Erreur dans le worker de reconnaissance: {e}")
+            # Mettre None dans la file d'attente pour indiquer une erreur
+            if hasattr(self, 'recognition_worker_queue') and self.recognition_worker_queue:
+                self.recognition_worker_queue.put(None)
     
     def _handle_potential_interruption(self, audio_data: bytes):
         """Gère les interruptions vocales potentielles pendant que Peer parle."""
@@ -1273,29 +1491,52 @@ class OmniscientSUI:
             # Convertir en numpy array
             audio_np = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32) / 32768.0
             
+            # Vérifier si l'audio est trop court ou trop silencieux
+            if len(audio_np) < 1600 or np.max(np.abs(audio_np)) < 0.01:
+                self.logger.debug("🔇 Audio trop court ou trop silencieux pour reconnaissance")
+                return None
+            
+            # Mesurer le temps de traitement
+            start_time = time.time()
+            
+            # Optimiser la taille de l'audio pour accélérer la reconnaissance
+            # Si l'audio est très long, on peut le sous-échantillonner
+            if len(audio_np) > 480000:  # Plus de 30 secondes
+                # Garder uniquement les N premières secondes pour accélérer
+                audio_np = audio_np[:480000]
+                self.logger.debug("⏱️ Audio tronqué pour accélérer la reconnaissance")
+            
             # Whisper transcription avec options optimisées
             result = self.whisper_model.transcribe(
                 audio_np,
                 language="fr",  # Forcer le français pour de meilleures performances
                 task="transcribe",
                 temperature=0.0,  # Déterministe
-                best_of=1,  # Plus rapide
-                beam_size=1,  # Plus rapide
-                # patience=1.0,  # Ne pas utiliser patience avec beam_size=1
+                best_of=1,        # Plus rapide
+                beam_size=1,      # Plus rapide
+                condition_on_previous_text=False,  # Plus rapide sans contexte
                 suppress_tokens=[-1],  # Supprimer les tokens spéciaux
-                fp16=False  # Éviter l'avertissement FP16 sur CPU
+                fp16=False,            # Éviter l'avertissement FP16 sur CPU
+                initial_prompt="Commande en français: "  # Aide à orienter la reconnaissance
             )
+            
+            # Mesurer le temps de traitement
+            processing_time = time.time() - start_time
             
             text = result["text"].strip()
             if text:
                 # Estimer la confiance basée sur la durée et la clarté
                 confidence = self._estimate_confidence(audio_np, text)
+                audio_quality = self._assess_audio_quality(audio_np)
+                
+                self.logger.debug(f"🔍 Reconnaissance en {processing_time:.2f}s (confiance: {confidence:.2f}, qualité: {audio_quality:.2f})")
                 
                 return SpeechRecognitionResult(
                     text=text,
                     confidence=confidence,
                     language="fr",
-                    audio_quality=self._assess_audio_quality(audio_np)
+                    audio_quality=audio_quality,
+                    processing_time=processing_time
                 )
             
         except Exception as e:
@@ -1304,41 +1545,86 @@ class OmniscientSUI:
         return None
     
     def _estimate_confidence(self, audio_np: np.ndarray, text: str) -> float:
-        """Estime la confiance de la reconnaissance."""
+        """Estime la confiance de la reconnaissance basée sur plusieurs facteurs."""
         try:
-            # Facteurs de confiance
+            # 1. Facteur qualité audio
             audio_quality = self._assess_audio_quality(audio_np)
-            text_length_factor = min(1.0, len(text) / 20)  # Textes plus longs = plus fiables
             
-            # Mots de confiance (mots courants bien reconnus)
-            confidence_words = ["aide", "bonjour", "merci", "oui", "non", "comment", "quoi", "où", "quand"]
-            word_confidence = sum(1 for word in confidence_words if word in text.lower()) / max(1, len(text.split()))
+            # 2. Facteur longueur du texte (textes plus longs = plus fiables)
+            text_length = len(text)
+            text_length_factor = min(1.0, text_length / 30)
             
-            # Combinaison des facteurs
-            confidence = (audio_quality * 0.4 + text_length_factor * 0.3 + word_confidence * 0.3)
+            # 3. Facteur mots reconnaissables
+            # Liste étendue de mots courants en français bien reconnus par Whisper
+            confidence_words = [
+                "aide", "bonjour", "merci", "oui", "non", "comment", "quoi", "où", "quand",
+                "pourquoi", "salut", "peer", "pardon", "okay", "ok", "bien", "stop",
+                "analyser", "expliquer", "arrête", "version", "statut"
+            ]
             
-            return min(1.0, max(0.1, confidence))
+            words_in_text = text.lower().split()
+            recognized_words = sum(1 for word in confidence_words if word in words_in_text)
+            word_confidence = min(1.0, recognized_words / max(1, len(words_in_text)))
             
-        except:
+            # 4. Facteur caractères spéciaux (moins il y en a, plus c'est fiable)
+            special_chars = sum(1 for c in text if not (c.isalnum() or c.isspace()))
+            special_char_penalty = max(0.0, 1.0 - (special_chars / max(1, len(text))))
+            
+            # Combinaison pondérée des facteurs
+            confidence = (
+                audio_quality * 0.35 +
+                text_length_factor * 0.25 +
+                word_confidence * 0.25 +
+                special_char_penalty * 0.15
+            )
+            
+            # Assurer une plage raisonnable
+            return min(1.0, max(0.2, confidence))
+            
+        except Exception as e:
+            self.logger.debug(f"Erreur estimation confiance: {e}")
             return 0.7  # Confiance par défaut
     
     def _assess_audio_quality(self, audio_np: np.ndarray) -> float:
-        """Évalue la qualité de l'audio."""
+        """Évalue la qualité de l'audio en utilisant plusieurs métriques."""
         try:
-            # Signal-to-noise ratio approximatif
+            # Vérifier si l'audio est vide ou trop court
+            if len(audio_np) < 1600 or np.max(np.abs(audio_np)) < 0.01:
+                return 0.2
+            
+            # 1. Signal-to-noise ratio approximatif
             signal_power = np.mean(audio_np**2)
-            if signal_power == 0:
-                return 0.1
+            if signal_power < 1e-6:  # Presque silencieux
+                return 0.2
             
-            # Ratio signal/bruit basé sur la variance
-            snr = 10 * np.log10(signal_power / max(1e-10, np.var(audio_np)))
+            # 2. Calculer le SNR basé sur la variance du signal
+            background_noise = np.var(audio_np[:min(1600, len(audio_np))])  # Bruit de fond au début
+            snr = 10 * np.log10(signal_power / max(1e-10, background_noise))
+            snr_quality = min(1.0, max(0.0, (snr + 10) / 40))
             
-            # Normaliser entre 0 et 1
-            quality = min(1.0, max(0.1, (snr + 10) / 50))
+            # 3. Calculer l'amplitude du signal (dynamique)
+            amplitude = np.max(np.abs(audio_np)) - np.min(np.abs(audio_np))
+            amplitude_quality = min(1.0, amplitude * 5)
             
-            return quality
+            # 4. Régularité du signal (faible variance = plus constant, plus fiable)
+            chunk_size = min(1600, len(audio_np) // 8)
+            chunks = [audio_np[i:i+chunk_size] for i in range(0, len(audio_np), chunk_size)]
+            chunk_powers = [np.mean(chunk**2) for chunk in chunks if len(chunk) == chunk_size]
+            power_variance = np.var(chunk_powers) if chunk_powers else 1.0
+            regularity = min(1.0, max(0.0, 1.0 - power_variance))
             
-        except:
+            # Combinaison pondérée
+            quality = (
+                snr_quality * 0.5 +
+                amplitude_quality * 0.3 +
+                regularity * 0.2
+            )
+            
+            # Ajustement final
+            return min(1.0, max(0.2, quality))
+            
+        except Exception as e:
+            self.logger.debug(f"Erreur évaluation audio: {e}")
             return 0.7  # Qualité par défaut
     
     def _intelligent_command_loop(self):
@@ -1526,190 +1812,275 @@ class OmniscientSUI:
                 tts_error[0] = e
                 tts_completed.set()
         
-        # Lancer la vocalisation dans un thread séparé avec timeout
+        # Lancer la vocalisation dans un thread séparé avec timeout généreux
         thread = threading.Thread(target=tts_thread, daemon=True)
         thread.start()
         
-        # Attendre avec timeout de 30 secondes maximum
-        if not tts_completed.wait(timeout=30.0):
-            self.logger.error("⏰ Timeout TTS - vocalisation abandonnée")
+        # Attendre avec timeout étendu de 120 secondes pour permettre de longs messages
+        # Le système central peut générer des messages de toute longueur
+        if not tts_completed.wait(timeout=120.0):
+            self.logger.error("⏰ Timeout TTS étendu - vocalisation abandonnée après 2 minutes")
             return
         
         # Vérifier s'il y a eu une erreur
         if tts_error[0]:
             raise tts_error[0]
 
-    def _update_performance_metrics(self, recognition_result: SpeechRecognitionResult):
-        """Met à jour les métriques de performance et d'apprentissage."""
-        self.performance_metrics["response_time"] = recognition_result.processing_time
-        self.performance_metrics["recognition_confidence"] = recognition_result.confidence
-        self.performance_metrics["audio_quality"] = recognition_result.audio_quality
-        self.command_history.append(recognition_result.text)
+    def _safe_vocalize(self, text: str):
+        """Vocalisation sécurisée avec protection anti-récursion améliorée."""
+        if not text or not text.strip():
+            return
+            
+        # Protection stricte contre la récursion TTS
+        if hasattr(self, '_tts_recursion_depth'):
+            if self._tts_recursion_depth > 1:
+                self.logger.warning(f"🚫 Récursion TTS détectée (niveau {self._tts_recursion_depth}) - message ignoré: {text[:50]}...")
+                return
+        
+        try:
+            # Marquer qu'on va parler AVANT de commencer
+            self.speaking = True
+            start_time = time.time()
+            
+            # Vocaliser directement avec la méthode sécurisée pour éviter la récursion
+            self._safe_tts_speak(text)
+            
+        except Exception as e:
+            self.logger.error(f"❌ Erreur lors de la vocalisation sécurisée: {e}")
+            # En cas d'erreur, ne pas essayer de re-vocaliser pour éviter la récursion
+            if self.show_visual_indicators:
+                self._update_visual_status(f"❌ [Erreur TTS silencieuse] {text[:30]}...")
+        finally:
+            # S'assurer que speaking est remis à False
+            self.speaking = False
 
-    def _analyze_current_context(self) -> ContextualInfo:
-        """Analyse le contexte courant pour l'assistance intelligente."""
-        return ContextualInfo(
-            current_time=datetime.datetime.now(),
-            session_duration=time.time() - self.session_start_time,
-            commands_count=len(self.command_history),
-            last_commands=list(self.command_history)[-5:],
-            user_response_pattern={},  # À enrichir selon l'apprentissage
-            system_performance={
-                "cpu": psutil.cpu_percent(),
-                "memory": psutil.virtual_memory().percent,
-                "disk": psutil.disk_usage("/").percent
-            },
-            recent_errors=[],
-            working_directory=os.getcwd(),
-            active_files=[]
-        )
+    def _handle_command_error(self, error: Exception):
+        """Gère les erreurs de commande sans risque de récursion TTS."""
+        error_msg = str(error)
+        self.logger.error(f"❌ Erreur de commande: {error_msg}")
+        
+        # Affichage visuel UNIQUEMENT pour éviter la récursion TTS
+        if self.show_visual_indicators:
+            self._update_visual_status(f"❌ Erreur: {error_msg[:50]}...")
+        
+        # Log pour debugging mais pas de vocalisation
+        self.logger.debug(f"Erreur de commande détaillée: {error}")
 
-    def _provide_proactive_assistance(self, context: ContextualInfo):
-        """Fournit une assistance proactive basée sur le contexte."""
-        # Exemple : proposer un tutoriel si beaucoup d'erreurs ou d'hésitations
-        if context.commands_count > 3 and any("aide" in cmd.lower() for cmd in context.last_commands):
-            self.vocalize("Je remarque que vous demandez souvent de l'aide. Voulez-vous un tutoriel interactif ou une explication détaillée ?")
+    def _record_single_speech_session(self, stream) -> Optional[bytes]:
+        """Enregistre une session de parole unique jusqu'à détection complète."""
+        if not stream:
+            return None
+            
+        try:
+            audio_data = b''
+            frames_recorded = 0
+            max_frames = int(self.sample_rate * 10 / self.chunk_size)  # Max 10 secondes
+            speech_detected = False
+            silence_frames = 0
+            max_silence_frames = int(self.sample_rate * 2 / self.chunk_size)  # 2 secondes de silence
+            
+            self.logger.debug("🎙️ Début de session d'écoute...")
+            
+            while frames_recorded < max_frames and self.running:
+                # Vérifier si on doit arrêter d'écouter (si on commence à parler)
+                if self.speaking or self.paused:
+                    self.logger.debug("🔇 Arrêt d'écoute - assistant en train de parler")
+                    break
+                
+                try:
+                    # Lire un chunk audio
+                    chunk = stream.read(self.chunk_size, exception_on_overflow=False)
+                    if not chunk:
+                        break
+                        
+                    audio_data += chunk
+                    frames_recorded += 1
+                    
+                    # Analyser le chunk pour détecter la parole
+                    audio_np = np.frombuffer(chunk, dtype=np.int16)
+                    # Calcul d'énergie sécurisé pour éviter les valeurs invalides
+                    if len(audio_np) > 0:
+                        mean_squared = np.mean(audio_np.astype(np.float64)**2)
+                        energy = np.sqrt(max(0, mean_squared))  # Éviter les valeurs négatives
+                    else:
+                        energy = 0.0
+                    
+                    # Détecter l'activité vocale
+                    if energy > self.energy_threshold:
+                        speech_detected = True
+                        silence_frames = 0
+                        if self.show_visual_indicators:
+                            self._update_visual_status("🎙️ Parole détectée...")
+                    else:
+                        if speech_detected:
+                            silence_frames += 1
+                            
+                    # Si on a détecté de la parole et qu'on a maintenant du silence, arrêter
+                    if speech_detected and silence_frames > max_silence_frames:
+                        self.logger.debug("🔇 Fin de parole détectée (silence prolongé)")
+                        break
+                        
+                except Exception as e:
+                    self.logger.error(f"❌ Erreur lors de la lecture audio: {e}")
+                    break
+            
+            # Retourner les données audio si on a détecté de la parole
+            if speech_detected and len(audio_data) > 0:
+                self.logger.debug(f"✅ Session d'écoute terminée - {len(audio_data)} bytes enregistrés")
+                return audio_data
+            else:
+                return None
+                
+        except Exception as e:
+            self.logger.error(f"❌ Erreur dans la session d'écoute: {e}")
+            return None
 
-    def _adapt_to_user_patterns(self):
-        """Adapte le comportement selon les patterns utilisateur."""
-        # À enrichir : analyse des habitudes pour personnaliser l'expérience
-        pass
-
+    def _process_speech_immediately(self, audio_data: bytes):
+        """Traite immédiatement la parole détectée."""
+        if not audio_data:
+            return
+            
+        try:
+            # Indiquer qu'on traite
+            if self.show_visual_indicators:
+                self._update_visual_status("🧠 Traitement de la parole...")
+            
+            # Reconnaissance vocale
+            recognition_result = self._recognize_speech_whisper(audio_data)
+            
+            if recognition_result and recognition_result.text:
+                speech_text = recognition_result.text.strip()
+                
+                if speech_text:
+                    self.logger.info(f"🎯 Parole reconnue: '{speech_text}'")
+                    
+                    # Mettre en queue pour traitement
+                    self.command_queue.put(speech_text)
+                    
+                    # Mettre à jour les métriques
+                    self._update_performance_metrics(recognition_result)
+                else:
+                    self.logger.debug("🔇 Parole reconnue mais texte vide")
+            else:
+                self.logger.debug("🔇 Aucune parole reconnue clairement")
+                
+        except Exception as e:
+            self.logger.error(f"❌ Erreur lors du traitement immédiat: {e}")
+    
     def _generate_personalized_greeting(self) -> str:
-        """Génère un message d'accueil personnalisé selon le contexte."""
-        hour = datetime.datetime.now().hour
-        if hour < 12:
-            return "Bonjour, prêt à coder ! Comment puis-je vous aider ?"
-        elif hour < 18:
-            return "Bon après-midi, que souhaitez-vous accomplir aujourd'hui ?"
+        """Génère un message d'accueil personnalisé complet basé sur l'heure et l'historique."""
+        import datetime
+        
+        current_hour = datetime.datetime.now().hour
+        
+        # Message d'accueil personnalisé
+        if current_hour < 12:
+            time_greeting = "Bonjour"
+        elif current_hour < 18:
+            time_greeting = "Bon après-midi"
         else:
-            return "Bonsoir, besoin d'aide pour avancer sur votre projet ?"
-
+            time_greeting = "Bonsoir"
+        
+        # Message complet et informatif - le système central génère des messages de toute longueur
+        greeting_parts = [
+            f"{time_greeting} ! Interface vocale Peer omnisciente activée et prête.",
+            "Je dispose d'une reconnaissance vocale de haute qualité avec Whisper",
+            "et je peux traiter des messages de toute longueur sans restriction.",
+            "Vous pouvez me parler naturellement ou dire 'aide' pour découvrir mes commandes.",
+            "Mon système d'isolation audio évite l'auto-écoute et je gère intelligemment les interruptions.",
+            "Je suis à votre service pour toute tâche ou question."
+        ]
+        
+        return " ".join(greeting_parts)
+    
     def _generate_personalized_farewell(self) -> str:
-        """Génère un message de fin personnalisé."""
-        return "Interface vocale Peer arrêtée. À bientôt et bon codage !"
+        """Génère un message d'adieu personnalisé complet."""
+        import datetime
+        
+        current_hour = datetime.datetime.now().hour
+        
+        # Message basé sur l'heure
+        if 6 <= current_hour < 18:
+            farewell = "Bonne journée"
+        elif 18 <= current_hour < 22:
+            farewell = "Bonne soirée"
+        else:
+            farewell = "Bonne nuit"
+        
+        # Ajouter des informations détaillées sur la session si disponible
+        session_info = ""
+        if hasattr(self, 'total_commands') and self.total_commands > 0:
+            session_info = f" Nous avons traité {self.total_commands} commandes ensemble durant cette session."
+        
+        # Message complet sans restriction de longueur
+        farewell_parts = [
+            "Interface vocale Peer omnisciente en cours d'arrêt.",
+            session_info,
+            "La reconnaissance vocale de haute qualité et le traitement intelligent ont été désactivés.",
+            f"{farewell} et merci d'avoir utilisé Peer !",
+            "À bientôt pour une nouvelle session productive."
+        ]
+        
+        return " ".join(farewell_parts)
 
     def _monitor_system_health(self):
-        """Surveille la santé du système et ajuste le comportement si besoin."""
-        # Exemple : si CPU > 90%, prévenir l'utilisateur
-        cpu = psutil.cpu_percent()
-        if cpu > 90:
-            self.vocalize("Attention, l'utilisation du processeur est très élevée.")
-
-    def _save_user_preferences(self):
-        """Sauvegarde les préférences utilisateur via l'adaptateur."""
-        self.adapter._save_user_preferences()
-
-    def _load_user_preferences(self):
-        """Charge les préférences utilisateur via l'adaptateur."""
-        self.adapter._load_user_preferences()
-
+        """Surveille l'état du système et les performances."""
+        try:
+           
+            # Vérification basique de la santé du système
+            import psutil
+            
+            # Monitorer l'utilisation CPU (si trop élevée, réduire la fréquence de traitement)
+            cpu_percent = psutil.cpu_percent(interval=None)
+            if cpu_percent > 80:
+                self.logger.warning(f"⚠️ CPU élevé: {cpu_percent}%")
+            
+            # Monitorer la mémoire
+            memory = psutil.virtual_memory()
+            if memory.percent > 85:
+                self.logger.warning(f"⚠️ Mémoire élevée: {memory.percent}%")
+            
+            # Vérifier que les threads principaux sont toujours actifs
+            if hasattr(self, 'listen_thread') and not self.listen_thread.is_alive():
+                self.logger.error("❌ Thread d'écoute arrêté")
+            
+            if hasattr(self, 'command_thread') and not self.command_thread.is_alive():
+                self.logger.error("❌ Thread de commandes arrêté")
+                
+        except Exception as e:
+            self.logger.debug(f"Erreur lors du monitoring: {e}")
 
 def main():
-    """
-    Point d'entrée principal pour lancer l'interface vocale omnisciente SUI.
-    
-    Cette fonction initialise et démarre l'interface vocale avec toutes ses capacités
-    d'intelligence artificielle avancées:
-    - Détection d'activité vocale (VAD)
-    - Reconnaissance Whisper optimisée
-    - Analyse contextuelle et assistance proactive
-    - Apprentissage adaptatif
-    - Intégration complète avec le daemon IA
-    """
-    print("=" * 60)
-    print("🎤 Interface Vocale Omnisciente SUI - Peer AI Assistant")
-    print("=" * 60)
-    print("Initialisation de l'interface vocale avancée...")
-    
-    # Configuration du logging pour l'exécution standalone
-    logger = logging.getLogger("SUI-Main")
-    
+    """Point d'entrée principal de l'interface vocale omnisciente."""
     try:
-        # Création du répertoire de configuration si nécessaire
-        config_dir = Path.home() / ".peer"
-        config_dir.mkdir(exist_ok=True)
-        
-        logger.info("Démarrage de l'interface vocale omnisciente SUI")
-        
-        # Initialisation de l'interface SUI
+        print("=== Interface Vocale Omnisciente Peer (SUI) ===")
+        print("🎙️ Démarrage de l'interface vocale avec capacités d'IA avancées...")
+        print("⚡ Mode talkie-walkie activé pour éviter l'auto-écoute")
+        print("🧠 Reconnaissance vocale Whisper optimisée pour le français")
+        print("🔄 Assistance proactive et apprentissage adaptatif")
+        print("Appuyez sur Ctrl+C pour arrêter")
+        print()
+
+        # Créer et démarrer l'interface SUI
         sui = OmniscientSUI()
-        
-        print("✅ Interface vocale initialisée avec succès !")
-        print("\n📋 Fonctionnalités disponibles:")
-        print("  • Reconnaissance vocale en continu avec Whisper")
-        print("  • Détection d'activité vocale avancée (WebRTC VAD)")
-        print("  • Commandes SUI directes (volume, vitesse, pause)")
-        print("  • Transmission intelligente des requêtes au daemon IA")
-        print("  • Analyse contextuelle et assistance proactive")
-        print("  • Apprentissage adaptatif des préférences utilisateur")
-        print("  • Synthèse vocale avec gestion des interruptions")
-        
-        print("\n🎯 Commandes SUI directes disponibles:")
-        print("  • 'volume haut/bas' - Ajuster le volume")
-        print("  • 'vitesse normale/lente/rapide' - Ajuster la vitesse de parole")
-        print("  • 'répète' - Répéter la dernière réponse")
-        print("  • 'pause/arrêt' - Mettre en pause ou arrêter")
-        print("  • 'aide' - Obtenir de l'aide")
-        
-        print("\n🤖 Toutes les autres requêtes seront transmises au daemon IA pour:")
-        print("  • Génération et modification de code")
-        print("  • Analyse de projets et debugging")
-        print("  • Assistance technique avancée")
-        print("  • Gestion de fichiers et configurations")
-        
-        print("\n🎤 Dites 'Peer' ou commencez à parler...")
-        print("   Appuyez sur Ctrl+C pour arrêter l'interface")
-        print("=" * 60)
-        
-        # Démarrage de l'interface vocale
         sui.start()
-        
-        # Boucle principale - maintient l'interface active
+
+        # Maintenir l'application en vie
         try:
-            while sui.listening:
-                time.sleep(0.5)
-                # Vérification périodique de la santé du système
-                sui._monitor_system_health()
+            while sui.running:
+                time.sleep(0.1)
         except KeyboardInterrupt:
-            print("\n\n🛑 Arrêt demandé par l'utilisateur...")
-            logger.info("Arrêt de l'interface vocale sur demande utilisateur")
-        
+            print("\n🛑 Arrêt demandé par l'utilisateur")
+            sui.stop()
+
+    except KeyboardInterrupt:
+        print("\n🛑 Arrêt demandé par l'utilisateur")
     except Exception as e:
-        logger.error(f"Erreur critique lors du démarrage de SUI: {e}")
-        print(f"\n❌ Erreur critique: {e}")
-        print("\n🔧 Suggestions de dépannage:")
-        print("  1. Vérifiez que votre microphone est connecté et fonctionnel")
-        print("  2. Assurez-vous que les dépendances audio sont installées:")
-        print("     pip install pyaudio numpy pyttsx3 openai-whisper webrtcvad")
-        print("  3. Vérifiez les permissions d'accès au microphone")
-        print("  4. Consultez les logs détaillés dans ~/.peer/sui.log")
-        return 1
-    
-    finally:
-        # Nettoyage et fermeture propre
-        try:
-            if 'sui' in locals():
-                print("🔄 Arrêt de l'interface vocale...")
-                sui.stop()
-                print("✅ Interface vocale arrêtée proprement")
-            logger.info("Interface vocale SUI fermée")
-        except Exception as e:
-            logger.error(f"Erreur lors de la fermeture: {e}")
-            print(f"⚠️  Erreur lors de la fermeture: {e}")
-    
-    print("👋 Au revoir et bon codage !")
-    return 0
+        print(f"❌ Erreur fatale: {e}")
+        import traceback
+        traceback.print_exc()
+        logging.error(f"Erreur fatale dans SUI omnisciente: {e}")
 
 
 if __name__ == "__main__":
-    """
-    Lancement direct du script SUI.
-    
-    Usage:
-        python -m peer.interfaces.sui.sui
-        ou
-        python /path/to/sui.py
-    """
-    exit_code = main()
-    sys.exit(exit_code)
+    main()

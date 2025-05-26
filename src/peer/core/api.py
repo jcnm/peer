@@ -41,6 +41,7 @@ class CommandType(Enum):
     EXECUTE = "execute"
     QUERY = "query"
     EXPLAIN = "explain"
+    PROMPT = "prompt"
     
     # File and project operations
     FILE_ANALYZE = "file_analyze"
