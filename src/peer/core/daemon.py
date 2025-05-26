@@ -233,6 +233,8 @@ class PeerDaemon(CoreAPI):
                 return self._handle_time(request)
             elif request.command == CommandType.DATE:
                 return self._handle_date(request)
+            elif request.command == CommandType.QUIT:
+                return self._handle_quit(request)
             elif request.command == CommandType.SESSION_CREATE:
                 return self._handle_session_create(request)
             elif request.command == CommandType.SESSION_END:
@@ -538,6 +540,18 @@ class PeerDaemon(CoreAPI):
                         request_id=request.request_id,
                         instance_id=self.instance_id
                     )
+    
+    def _handle_quit(self, request: CoreRequest) -> CoreResponse:
+        """Handle quit command"""
+        return CoreResponse(
+            type=ResponseType.SUCCESS,
+            status="quit_requested",
+            message="Interface arrêtée à la demande de l'utilisateur. À bientôt !",
+            data={'quit': True, 'farewell': True},
+            request_id=request.request_id,
+            session_id=request.session_id,
+            instance_id=self.instance_id
+        )
     
     def get_capabilities(self) -> Dict[str, Any]:
         """Get available commands and their capabilities"""
