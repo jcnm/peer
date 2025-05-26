@@ -68,23 +68,37 @@ class SimpleTTSAdapter:
                     script_path = f.name
                     f.write("""
 import sys
+import signal
 import pyttsx3
 
+def signal_handler(signum, frame):
+    '''Gestionnaire de signal pour arrêt gracieux'''
+    print("TTS subprocess interrupted gracefully")
+    sys.exit(0)
+
 def speak(text):
-    engine = pyttsx3.init()
-    engine.setProperty('rate', 150)
-    engine.setProperty('volume', 1.0)
+    # Installer le gestionnaire de signal pour KeyboardInterrupt
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
     
-    # Sélectionner une voix française si disponible
-    voices = engine.getProperty('voices')
-    for voice in voices:
-        if 'french' in voice.name.lower() or 'fr' in voice.id.lower():
-            engine.setProperty('voice', voice.id)
-            break
-    
-    engine.say(text)
-    engine.runAndWait()
-    engine.stop()
+    try:
+        engine = pyttsx3.init()
+        engine.setProperty('rate', 150)
+        engine.setProperty('volume', 1.0)
+        
+        # Sélectionner une voix française si disponible
+        voices = engine.getProperty('voices')
+        for voice in voices:
+            if 'french' in voice.name.lower() or 'fr' in voice.id.lower():
+                engine.setProperty('voice', voice.id)
+                break
+        
+        engine.say(text)
+        engine.runAndWait()
+        engine.stop()
+    except Exception as e:
+        print(f"TTS Error: {e}")
+        sys.exit(1)
 
 if __name__ == "__main__":
     if len(sys.argv) > 1:
