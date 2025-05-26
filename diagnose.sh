@@ -11,6 +11,7 @@ IFS=$'\n\t'
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly VENV_NAME="vepeer"
 readonly VENV_PATH="$SCRIPT_DIR/$VENV_NAME"
+readonly VIRTUAL_ENV=$VENV_NAME
 
 # Couleurs pour une meilleure lisibilité
 RED='\033[0;31m'
@@ -79,7 +80,7 @@ get_python_module_path() {
 
 # Fonction pour vérifier si l'environnement virtuel est activé
 check_venv() {
-    if [ -z "$VIRTUAL_ENV" ]; then
+    if [ -z "$VENV_NAME" ]; then
         warning "Aucun environnement virtuel n'est activé."
         if [ -d "vepeer" ]; then
             info "L'environnement virtuel 'vepeer' existe. Activez-le avec: source vepeer/bin/activate"
