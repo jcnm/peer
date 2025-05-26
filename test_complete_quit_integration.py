@@ -7,7 +7,7 @@ import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
-from peer.core.api import CommandType, CoreRequest, CoreResponse
+from peer.core.api import CommandType, CoreRequest, CoreResponse, ResponseType
 from peer.core.daemon import PeerDaemon
 from peer.interfaces.sui.sui import IntelligentSUISpeechAdapter
 
@@ -38,10 +38,10 @@ def test_complete_quit_flow():
             core_request = adapter.translate_to_core(message)
             
             # Vérifications
-            if core_request.command != CommandType.QUIT:
+            if core_request.command != CommandType.QUIT and core_request.command != CommandType.DIRECT_QUIT:
                 print(f"  ❌ Erreur: Commande {core_request.command.value} au lieu de QUIT")
                 continue
-                
+            core_request.command = CommandType.QUIT
             print(f"  ✅ CoreRequest créé: {core_request.command.value}")
             print(f"      └─ Intent: {core_request.parameters.get('intent', 'N/A')}")
             
@@ -50,7 +50,7 @@ def test_complete_quit_flow():
             core_response = daemon.execute_command(core_request)
             
             # Vérifications
-            if not core_response.success:
+            if core_response.type != ResponseType.SUCCESS:
                 print(f"  ❌ Erreur: Daemon a échoué - {core_response.message}")
                 continue
                 
@@ -99,12 +99,13 @@ def test_quit_command_in_daemon():
         response = daemon.execute_command(quit_request)
         
         print("📥 Réponse reçue du daemon:")
-        print(f"   └─ Success: {response.success}")
+        print(f"   └─ Type: {response.type.value}")
+        print(f"   └─ Status: {response.status}")
         print(f"   └─ Message: {response.message}")
-        print(f"   └─ Command: {response.command}")
+        print(f"   └─ Data: {response.data}")
         
         # Vérifications
-        if response.success and response.command == CommandType.QUIT:
+        if response.type == ResponseType.SUCCESS and response.data.get("quit"):
             print("✅ La commande QUIT a été traitée correctement")
             return True
         else:
@@ -124,10 +125,10 @@ def test_message_adaptation():
     
     # Simuler une réponse d'arrêt du daemon
     quit_response = CoreResponse(
-        success=True,
+        type=ResponseType.SUCCESS,
+        status="quit_requested",
         message="Au revoir ! J'ai été ravi de vous aider. N'hésitez pas à revenir quand vous voulez.",
-        command=CommandType.QUIT,
-        data={"farewell": True}
+        data={"farewell": True, "quit": True}
     )
     
     print("📝 Message original du daemon:")

@@ -431,6 +431,20 @@ class IntelligentSUISpeechAdapter(InterfaceAdapter):
         # Analyser l'intention et extraire les paramètres
         command, parameters = self._parse_intelligent_speech_command(normalized_input, context or {})
         
+        # CONVERSION CRITICAL: DIRECT_QUIT → QUIT pour compatibilité système
+        # Le moteur NLP détecte correctement DIRECT_QUIT, mais le système principal attend QUIT
+        original_command = command
+        if command == CommandType.DIRECT_QUIT:
+            command = CommandType.QUIT
+            parameters["original_command_type"] = "DIRECT_QUIT"
+            parameters["immediate_quit"] = True
+            self.logger.info(f"🔄 Conversion: DIRECT_QUIT → QUIT (immédiat)")
+        elif command == CommandType.SOFT_QUIT:
+            command = CommandType.QUIT  
+            parameters["original_command_type"] = "SOFT_QUIT"
+            parameters["confirmation_needed"] = True
+            self.logger.info(f"🔄 Conversion: SOFT_QUIT → QUIT (avec confirmation)")
+        
         # Enrichir avec des informations contextuelles
         enriched_context = {
             "original_speech": speech_input,
@@ -469,73 +483,43 @@ class IntelligentSUISpeechAdapter(InterfaceAdapter):
         if self.user_preferences.get("proactive_assistance", True):
             proactive_suggestions = self._generate_proactive_suggestions(core_response)
         
-        # Gestion spéciale pour les nouvelles réponses de quit avec confirmation
         response_data = {
             "vocal_message": vocal_message,
-            "should_vocalize": True,
+            "should_vocalize": True, # Par défaut, peut être affiné par la logique ci-dessous ou core_response
             "original_response": core_response,
             "display_message": core_response.message,
             "response_type": core_response.type.value,
             "proactive_suggestions": proactive_suggestions,
+            "interface_action": None,  # Initialisé à None
             "voice_settings": {
                 "speed": self.user_preferences.get("voice_speed", 1.0),
                 "volume": self.user_preferences.get("voice_volume", 0.8)
             }
         }
         
-        # Gestion des nouvelles réponses avec confirmation intelligente
-        if hasattr(core_response, 'data') and core_response.data:
-            response_params = core_response.data
-            
-            # DIRECT_QUIT avec confirmation nécessaire
-            if response_params.get("confirmation_needed") and response_params.get("confirmation_message"):
-                response_data.update({
-                    "requires_confirmation": True,
-                    "confirmation_message": response_params.get("confirmation_message"),
-                    "confirmation_type": "precision_request",
-                    "original_command_type": "DIRECT_QUIT" if "direct_quit" in response_params.get("reason", "") else "SOFT_QUIT",
-                    "reason": response_params.get("reason", ""),
-                    "vocal_message": response_params.get("confirmation_message")
-                })
-                
-            # SOFT_QUIT avec demande de précision
-            elif response_params.get("precision_needed"):
-                response_data.update({
-                    "requires_confirmation": True,
-                    "confirmation_message": response_params.get("confirmation_message", "Souhaitez-vous que je m'arrête ?"),
-                    "confirmation_type": "soft_quit_clarification",
-                    "original_command_type": "SOFT_QUIT",
-                    "reason": response_params.get("reason", ""),
-                    "vocal_message": response_params.get("confirmation_message", "Souhaitez-vous que je m'arrête ?")
-                })
-                
-            # Séquences de commandes avec SOFT_QUIT
-            elif response_params.get("is_command_sequence"):
-                command_sequence = response_params.get("command_sequence", [])
-                sequence_description = response_params.get("sequence_description", "")
-                
-                response_data.update({
-                    "is_command_sequence": True,
-                    "command_sequence": command_sequence,
-                    "sequence_description": sequence_description,
-                    "vocal_message": sequence_description,
-                    "requires_confirmation": response_params.get("confirmation_needed", False)
-                })
-                
-                if response_params.get("confirmation_needed"):
-                    response_data.update({
-                        "confirmation_message": response_params.get("confirmation_message", "Comment souhaitez-vous procéder ?"),
-                        "confirmation_type": "command_sequence_clarification"
-                    })
-            
-            # DIRECT_QUIT immédiat (fin de phrase)
-            elif response_params.get("immediate_quit"):
-                response_data.update({
-                    "immediate_quit": True,
-                    "should_vocalize": True,
-                    "vocal_message": "Au revoir !"
-                })
+        # Déterminer l'action d'interface par défaut basée sur la vocalisation
+        if response_data["vocal_message"] and response_data["should_vocalize"]:
+            response_data["interface_action"] = "INFORM"
         
+        # Gestion des actions spécifiques basées sur la réponse du démon
+        if hasattr(core_response, 'data') and core_response.data:
+            if core_response.data.get("quit") is True and core_response.type == ResponseType.SUCCESS:
+                response_data["interface_action"] = "QUIT"
+                self.logger.info("🎬 Action d'interface définie sur QUIT suite à la confirmation d'arrêt du démon.")
+            # TODO: Implémenter la logique pour d'autres actions comme ASK, PRECISE
+            # en se basant sur des indicateurs spécifiques dans core_response.data. Par exemple:
+            # elif core_response.data.get("needs_user_clarification"):
+            #     response_data["interface_action"] = "ASK"
+            #     response_data["action_details"] = core_response.data.get("clarification_prompt")
+            #     self.logger.info(f"🎬 Action d'interface définie sur ASK: {response_data['action_details']}")
+            # elif core_response.data.get("needs_more_details_from_user"):
+            #     response_data["interface_action"] = "PRECISE"
+            #     response_data["action_details"] = core_response.data.get("precision_prompt")
+            #     self.logger.info(f"🎬 Action d'interface définie sur PRECISE: {response_data['action_details']}")
+
+        # L'ancien bloc "Vérifier si l'interface SUI doit s'arrêter" est maintenant couvert.
+        # S'il y avait du code spécifique pour should_quit_sui, il est remplacé.
+
         return response_data
     
     def _normalize_speech_input(self, speech_input: str) -> str:
@@ -1202,12 +1186,10 @@ class IntelligentSUISpeechAdapter(InterfaceAdapter):
         
         # Suggestions basées sur le type de réponse
         if core_response.type == ResponseType.ERROR:
-            suggestions.append("Voulez-vous que j'analyse l'erreur en détail ?")
-            suggestions.append("Je peux proposer des solutions pour corriger ce problème.")
+            suggestions.append("Voulez-vous que j'analyse l'erreur en détail ?") 
         
         elif core_response.type == ResponseType.SUCCESS:
-            suggestions.append("Souhaitez-vous optimiser cette opération ?")
-            suggestions.append("Je peux analyser la performance si vous voulez.")
+            suggestions.append("Besoin d'aide pour autre chose ?")
         
         # Suggestions basées sur l'historique
         if len(self.command_history) > 5:
@@ -1327,18 +1309,7 @@ class OmniscientSUI:
         # Intelligence et contexte
         self.command_queue = queue.Queue()
         self.context_queue = queue.Queue()
-        self.session_start_time = time.time()
-        self.command_history = deque(maxlen=100)
-        self.response_style = "balanced"  # concise, balanced, detailed
-        
-        # Métriques de performance
-        self.avg_response_time = 0.0
-        self.recognition_accuracy = 0.95
-        self.interruption_count = 0
-        self.total_commands = 0
-        
-        # Variables pour l'analyse contextuelle
-        self.last_context_analysis = time.time()
+        self.last_context_analysis = time.time() # Initialisation
         self.context_analysis_interval = 30.0  # Analyser le contexte toutes les 30s
         self.performance_metrics = {
             "cpu_usage": 0.0,
@@ -1346,6 +1317,9 @@ class OmniscientSUI:
             "disk_usage": 0.0,
             "response_time": 0.0
         }
+        self.total_commands = 0  # Initialisation
+        self.avg_response_time = 0.0  # Initialisation
+        self.recognition_accuracy = 0.0 # Initialisation
         
         # Variables pour l'audio avancé
         self.sample_rate = 16000
@@ -1599,13 +1573,14 @@ class OmniscientSUI:
                 
                 time.sleep(5)  # Vérifier toutes les 5 secondes
         
+        # self.last_context_analysis = time.time() # Déplacé vers __init__
         context_thread = threading.Thread(target=context_analysis_loop, daemon=True)
         context_thread.start()
     
     def _initialize_adaptive_learning(self):
         """Initialise le système d'apprentissage adaptatif."""
         # Analyser les patterns d'utilisation existants
-        if self.command_history:
+        if self.adapter.command_history: # MODIFIED: Utiliser self.adapter.command_history
             self._adapt_to_user_patterns()
         
         # Charger les préférences utilisateur
@@ -1616,27 +1591,27 @@ class OmniscientSUI:
     def _adapt_to_user_patterns(self):
         """Analyse les patterns d'utilisation utilisateur et adapte l'interface."""
         try:
-            if not self.command_history:
+            if not self.adapter.command_history: # MODIFIED: Utiliser self.adapter.command_history
                 return
             
             # Analyser les commandes les plus fréquentes
             command_frequency = defaultdict(int)
-            for command in self.command_history:
+            for command in self.adapter.command_history: # MODIFIED: Utiliser self.adapter.command_history
                 if isinstance(command, dict) and 'command' in command:
                     command_frequency[command['command']] += 1
             
             # Adapter les seuils de reconnaissance selon l'historique
-            total_commands = len(self.command_history)
-            if total_commands > 10:
+            total_commands_in_history = len(self.adapter.command_history) # MODIFIED: Utiliser self.adapter.command_history
+            if total_commands_in_history > 10:
                 # Si l'utilisateur utilise beaucoup de commandes, être plus sensible
                 self.energy_threshold = max(400, self.energy_threshold * 0.9)
                 self.logger.info(f"🎯 Seuil d'énergie adapté à {self.energy_threshold:.0f} basé sur l'usage")
             
             # Identifier les préférences temporelles (si implémenté)
-            recent_commands = list(self.command_history)[-20:] if len(self.command_history) > 20 else list(self.command_history)
-            if recent_commands:
+            recent_commands_history = list(self.adapter.command_history)[-20:] if len(self.adapter.command_history) > 20 else list(self.adapter.command_history) # MODIFIED
+            if recent_commands_history:
                 # Analyser les patterns récents pour optimiser les réponses
-                self.logger.debug(f"📊 Dernières commandes analysées: {len(recent_commands)}")
+                self.logger.debug(f"📊 Dernières commandes analysées: {len(recent_commands_history)}")
                 
         except Exception as e:
             self.logger.warning(f"⚠️ Erreur lors de l'adaptation aux patterns utilisateur: {e}")
@@ -2476,18 +2451,15 @@ class OmniscientSUI:
             # Traduire la réponse pour l'interface vocale
             adapted_response = self.adapter.translate_from_core(response)
 
-            # Gestion spéciale des nouvelles réponses avec confirmation
-            if adapted_response.get("immediate_quit"):
-                # DIRECT_QUIT immédiat (fin de phrase) - arrêt sans confirmation
+            # Gestion des actions d'interface (QUIT, CONFIRMATION, etc.)
+            if adapted_response.get("interface_action") == "QUIT":
                 self._safe_vocalize(adapted_response.get("vocal_message", "Au revoir !"))
                 self.stop()
                 return
-                
             elif adapted_response.get("requires_confirmation"):
                 # Demande de confirmation intelligente
                 self._handle_confirmation_request(adapted_response, speech_text)
                 return
-                
             elif adapted_response.get("is_command_sequence"):
                 # Séquence de commandes détectée
                 self._handle_command_sequence(adapted_response)
@@ -2664,10 +2636,19 @@ class OmniscientSUI:
         """Gère les demandes de confirmation intelligentes pour les commandes d'arrêt ambiguës."""
         self.logger.info(f"Demande de confirmation reçue pour: {original_text}")
         
-        # Extraire les informations de la réponse
+        # Extraire les informations de la réponse (corrigé pour utiliser les bons noms de paramètres)
         confirmation_message = adapted_response.get("vocal_message", "Voulez-vous vraiment arrêter ?")
-        quit_type = adapted_response.get("quit_type", "SOFT_QUIT")
-        detected_commands = adapted_response.get("detected_commands", [])
+        quit_type = adapted_response.get("original_command_type", "SOFT_QUIT")  # Corrigé: utiliser original_command_type
+        detected_commands = adapted_response.get("command_sequence", [])  # Corrigé: utiliser command_sequence
+        confirmation_type = adapted_response.get("confirmation_type", "unknown")
+        reason = adapted_response.get("reason", "")
+        phrase_part_questioned = adapted_response.get("phrase_part_questioned", "")
+        
+        # Log détaillé pour debugging
+        self.logger.debug(f"Type de confirmation: {confirmation_type}")
+        self.logger.debug(f"Type de quit original: {quit_type}")
+        self.logger.debug(f"Raison: {reason}")
+        self.logger.debug(f"Partie questionnée: {phrase_part_questioned}")
         
         # Vocaliser la demande de confirmation
         self._safe_vocalize(confirmation_message)
@@ -2682,6 +2663,9 @@ class OmniscientSUI:
                 "original_text": original_text,
                 "quit_type": quit_type,
                 "detected_commands": detected_commands,
+                "confirmation_type": confirmation_type,
+                "reason": reason,
+                "phrase_part_questioned": phrase_part_questioned,
                 "timeout": time.time() + 30  # 30 secondes de timeout
             }
         else:
@@ -2935,11 +2919,7 @@ class OmniscientSUI:
         
         # Message complet et informatif - le système central génère des messages de toute longueur
         greeting_parts = [
-            f"{time_greeting} ! Interface vocale Peer omnisciente activée et prête.",
-            "Je dispose d'une reconnaissance vocale de haute qualité avec Whisper",
-            "et je peux traiter des messages de toute longueur sans restriction.",
-            "Vous pouvez me parler naturellement ou dire 'aide' pour découvrir mes commandes.",
-            "Mon système d'isolation audio évite l'auto-écoute et je gère intelligemment les interruptions.",
+            f"{time_greeting} ! Peer activée et prête.",
             "Je suis à votre service pour toute tâche ou question."
         ]
         
@@ -2966,11 +2946,8 @@ class OmniscientSUI:
         
         # Message complet sans restriction de longueur
         farewell_parts = [
-            "Interface vocale Peer omnisciente en cours d'arrêt.",
+            "Interface vocale Peer omnisciente en cours d'arrêt. {farewell}",
             session_info,
-            "La reconnaissance vocale de haute qualité et le traitement intelligent ont été désactivés.",
-            f"{farewell} et merci d'avoir utilisé Peer !",
-            "À bientôt pour une nouvelle session productive."
         ]
         
         return " ".join(farewell_parts)

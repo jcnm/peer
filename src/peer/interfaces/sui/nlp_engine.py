@@ -404,18 +404,33 @@ class HybridNLPEngine:
             
             # Nouvelles catégories d'arrêt
             CommandType.DIRECT_QUIT: {
-                "keywords": ["arrête", "stop", "quitte", "ferme", "exit", "quit"],
+                "keywords": ["arrête", "stop", "quitte", "ferme", "exit", "quit", "arrête-toi", "arrêtes-toi"],
                 "patterns": [
+                    # Commandes d'arrêt directes en début de phrase
                     r"^(?:arrête|stop|quitte|ferme|exit|quit)(?:\s+(?:maintenant|stp|tout|ça))?$",
+                    # Commandes d'arrêt directes en fin de phrase (après contexte)
+                    r"(?:arrête|stop|quitte|ferme|exit|quit)(?:[-\s]toi)?(?:\s+maintenant)?$",
+                    # Impératifs directs d'arrêt (patterns plus larges)
+                    r"(?:arrête|stop)[-\s](?:toi|vous)(?:\s+maintenant)?",
+                    # Commandes avec "maintenant" qui indiquent une urgence
+                    r"(?:arrête|stop|quitte|ferme)(?:[-\s]toi)?\s+maintenant",
+                    # Au revoir et formules de politesse directes
                     r"^(?:au revoir|bye|goodbye)$",
-                    r"^(?:bonne journée|bonne soirée|à bientôt)$"
+                    r"^(?:bonne journée|bonne soirée|à bientôt)$",
+                    # Patterns pour détecter les commandes d'arrêt explicites même dans un contexte
+                    r"\b(?:arrête[-\s]toi|arrêtes[-\s]toi|stop)\s+(?:maintenant|stp|tout de suite)",
+                    r"(?:tu peux|vous pouvez)\s+(?:arrêter|t'arrêter|vous arrêter)(?:\s+maintenant)?",
                 ],
                 "semantic_examples": [
                     "arrête",
                     "stop",
                     "quit",
+                    "arrête-toi maintenant",
+                    "stop maintenant", 
                     "au revoir",
-                    "bye"
+                    "bye",
+                    "arrête-toi",
+                    "tu peux t'arrêter maintenant"
                 ]
             },
             
@@ -496,7 +511,7 @@ class HybridNLPEngine:
         # Fallback final vers l'agent IA central
         return self._create_result(
             (CommandType.PROMPT, 0.5, {"full_text": text, "unrecognized": True}),
-            "fallback_to_ai", start_time, fallback=True
+            "fallback_to_ai", start_time
         )
     
     def _normalize_text(self, text: str) -> str:
@@ -521,12 +536,10 @@ class HybridNLPEngine:
         """
         Consolide les multiples détections en une décision finale intelligente.
         
-        Nouvelles règles:
-        1. DIRECT_QUIT en fin de phrase -> exécution immédiate
-        2. DIRECT_QUIT en milieu de phrase -> demander précision
-        3. SOFT_QUIT comme dernière commande -> demander précision
-        4. Plusieurs commandes -> définir une suite avec contexte approprié
-        5. Confirmation intelligente basée sur le contexte utilisateur
+        RÈGLES MODIFIÉES POUR PRIVILÉGIER LES COMMANDES D'ARRÊT EXPLICITES:
+        1. DIRECT_QUIT détecté = TOUJOURS DIRECT_QUIT (sans délai ni confirmation)
+        2. SOFT_QUIT seulement = demander confirmation
+        3. Position et contexte influencent seulement pour les cas ambigus
         """
         if not all_detections:
             return None
@@ -545,52 +558,38 @@ class HybridNLPEngine:
         # Analyser la position des commandes d'arrêt dans le texte
         quit_position = self._analyze_quit_position(text, direct_quit, soft_quit)
         
-        # PRIORITÉ 1: DIRECT_QUIT en fin de phrase -> exécution immédiate
-        if direct_quit and quit_position == "end":
+        # RÈGLE 1 PRIORITAIRE: DIRECT_QUIT détecté -> TOUJOURS EXÉCUTION IMMÉDIATE
+        # Cette règle a la priorité absolue car les commandes explicites doivent toujours être respectées
+        if direct_quit:
             best_confidence, best_params = max(direct_quit, key=lambda x: x[0])
             return CommandType.DIRECT_QUIT, best_confidence, {
                 **best_params,
                 "immediate_quit": True,
                 "confirmation_needed": False,
-                "reason": "direct_quit_end_of_sentence"
+                "reason": "explicit_quit_command_always_respected",
+                "user_intent_clear": True,
+                "position": quit_position,
+                "has_other_commands": bool(other_commands)
             }
         
-        # PRIORITÉ 2: DIRECT_QUIT en milieu de phrase -> demander précision
-        if direct_quit and quit_position == "middle":
-            best_confidence, best_params = max(direct_quit, key=lambda x: x[0])
-            confirmation_msg = self._generate_intelligent_confirmation(
-                text, "direct_quit_middle", direct_quit, other_commands, context
-            )
-            return CommandType.DIRECT_QUIT, best_confidence, {
-                **best_params,
-                "confirmation_needed": True,
-                "precision_needed": True,
-                "confirmation_message": confirmation_msg,
-                "reason": "direct_quit_in_middle_probably_error"
-            }
-        
-        # PRIORITÉ 3: SOFT_QUIT comme dernière commande détectée -> demander précision
-        if soft_quit and not other_commands:
+        # RÈGLE 2: SOFT_QUIT détecté -> DEMANDER CONFIRMATION
+        if soft_quit:
             best_confidence, best_params = max(soft_quit, key=lambda x: x[0])
             confirmation_msg = self._generate_intelligent_confirmation(
-                text, "soft_quit_last", soft_quit, {}, context
+                text, "soft_quit_detected", soft_quit, other_commands, context
             )
             return CommandType.SOFT_QUIT, best_confidence, {
                 **best_params,
                 "confirmation_needed": True,
                 "precision_needed": True,
                 "confirmation_message": confirmation_msg,
-                "reason": "soft_quit_as_last_command"
+                "reason": "soft_quit_inherently_uncertain",
+                "phrase_part_questioned": self._extract_questioned_part(text, quit_position)
             }
         
-        # PRIORITÉ 4: Plusieurs commandes (avec ou sans SOFT_QUIT) -> définir suite
+        # RÈGLE 3: Plusieurs commandes sans quit -> séquence normale
         if len(other_commands) > 0:
-            if soft_quit:
-                # SOFT_QUIT + autres commandes -> suite avec contexte
-                return self._create_command_sequence(text, soft_quit, other_commands, context)
-            else:
-                # Plusieurs commandes sans quit -> suite simple
-                return self._create_command_sequence(text, None, other_commands, context)
+            return self._create_command_sequence(text, None, other_commands, context)
         
         return None
     
@@ -619,7 +618,68 @@ class HybridNLPEngine:
             return "end"
         else:
             return "middle"
-    
+
+    def _extract_questioned_part(self, text: str, quit_position: str) -> str:
+        """
+        Extrait la partie de la phrase qui pose question selon la position du quit.
+        
+        Utile pour clarifier ce que l'utilisateur entend par cette partie ambiguë.
+        """
+        words = text.split()
+        quit_keywords = ["arrête", "stop", "quitte", "ferme", "exit", "quit", "bye", "au revoir", "merci"]
+        
+        # Trouver la position du mot d'arrêt
+        quit_word_index = -1
+        quit_word = ""
+        for i, word in enumerate(words):
+            if any(keyword in word.lower() for keyword in quit_keywords):
+                quit_word_index = i
+                quit_word = word
+                break
+        
+        if quit_word_index == -1:
+            return text  # Pas de mot d'arrêt trouvé, retourner tout le texte
+        
+        if quit_position == "middle":
+            # Si quit au milieu, la partie questionnée inclut le contexte autour
+            start_context = max(0, quit_word_index - 2)
+            end_context = min(len(words), quit_word_index + 3)
+            questioned_part = " ".join(words[start_context:end_context])
+            return f"...{questioned_part}..."
+        
+        elif quit_position == "end":
+            # Si quit à la fin, la partie questionnée est principalement le mot d'arrêt
+            return quit_word
+        
+        else:
+            return text
+
+    def _build_command_sequence(self, direct_quit: List, other_commands: Dict) -> List[Dict]:
+        """Construit une séquence de commandes à partir des détections multiples."""
+        sequence = []
+        
+        # Ajouter les autres commandes triées par confiance
+        for cmd_type, detections in other_commands.items():
+            best_conf, best_params = max(detections, key=lambda x: x[0])
+            sequence.append({
+                "command": cmd_type,
+                "confidence": best_conf,
+                "params": best_params,
+                "context_from_original": True
+            })
+        
+        # Ajouter DIRECT_QUIT à la fin
+        if direct_quit:
+            best_conf, best_params = max(direct_quit, key=lambda x: x[0])
+            sequence.append({
+                "command": CommandType.DIRECT_QUIT,
+                "confidence": best_conf,
+                "params": best_params,
+                "context_from_original": True
+            })
+        
+        return sequence
+
     def _generate_intelligent_confirmation(self, original_text: str, scenario: str, 
                                          quit_commands: List, other_commands: Dict, 
                                          context: Dict[str, Any]) -> str:
@@ -628,24 +688,31 @@ class HybridNLPEngine:
         # Extraire des éléments contextuels du texte original
         context_elements = self._extract_context_elements(original_text)
         
+        # Identifier la partie de phrase remise en question
+        quit_position = self._analyze_quit_position(original_text, quit_commands, [])
+        questioned_part = self._extract_questioned_part(original_text, quit_position)
+        
         if scenario == "direct_quit_middle":
             return f"J'ai entendu '{original_text}'. Je détecte une demande d'arrêt au milieu de votre phrase. " \
+                   f"Que voulez-vous dire exactement par '{questioned_part}' ? " \
                    f"Souhaitez-vous que je m'arrête maintenant ou vouliez-vous dire autre chose ?"
         
-        elif scenario == "soft_quit_last":
+        elif scenario == "soft_quit_detected":
             if "merci" in original_text.lower():
-                return f"Vous avez dit '{original_text}'. Je perçois de la gratitude. " \
+                return f"Vous avez dit '{original_text}'. Je perçois de la gratitude avec '{questioned_part}'. " \
                        f"Souhaitez-vous que je continue à vous assister ou préférez-vous que je m'arrête ?"
             else:
-                return f"D'après '{original_text}', dois-je comprendre que vous souhaitez que je m'arrête ?"
+                return f"D'après '{original_text}', que voulez-vous dire par '{questioned_part}' ? " \
+                       f"Dois-je comprendre que vous souhaitez que je m'arrête ?"
         
-        elif scenario == "multiple_with_soft_quit":
+        elif scenario == "multiple_with_direct_quit":
             cmd_names = [cmd.value for cmd in other_commands.keys()]
             return f"Dans '{original_text}', je détecte plusieurs intentions : {', '.join(cmd_names)} " \
-                   f"ainsi qu'une possible demande d'arrêt. Comment souhaitez-vous procéder ?"
+                   f"et aussi '{questioned_part}'. " \
+                   f"Voulez-vous que j'exécute ces commandes puis que je m'arrête, ou avez-vous une autre intention ?"
         
         else:
-            return f"Pouvez-vous clarifier votre demande à partir de : '{original_text}' ?"
+            return f"Pouvez-vous clarifier ce que vous entendez par '{questioned_part}' dans : '{original_text}' ?"
     
     def _extract_context_elements(self, text: str) -> Dict[str, Any]:
         """Extrait des éléments de contexte du texte original."""
@@ -858,7 +925,7 @@ class HybridNLPEngine:
                 
                 # Extraire une probabilité (méthode simplifiée)
                 # En réalité, il faudrait un modèle de classification fine-tuné
-                logits = outputs.last_hidden_state.mean(dim=1)
+                logits = outputs.last_hidden_state.mean(dim=1).mean(dim=1)  # Moyenne sur toutes les dimensions
                 confidence = torch.sigmoid(logits).item()
                 
                 if confidence >= 0.6:
@@ -937,6 +1004,61 @@ class HybridNLPEngine:
                 }))
         
         return detections
+
+    def _cosine_similarity(self, vec1: np.ndarray, vec2: np.ndarray) -> float:
+        """Calcule la similarité cosinus entre deux vecteurs."""
+        try:
+            # Normaliser les vecteurs
+            norm_vec1 = vec1 / np.linalg.norm(vec1)
+            norm_vec2 = vec2 / np.linalg.norm(vec2)
+            
+            # Calculer la similarité cosinus
+            similarity = np.dot(norm_vec1, norm_vec2)
+            return float(similarity)
+        except:
+            return 0.0
+
+    def _create_result(self, detection_result: Any, method_used: str, start_time: float) -> 'IntentResult':
+        """Crée un objet IntentResult à partir du résultat de détection."""
+        processing_time = time.time() - start_time
+        
+        if detection_result is None:
+            return IntentResult(
+                command_type=CommandType.PROMPT,
+                confidence=0.0,
+                method_used="fallback",
+                parameters={},
+                processing_time=processing_time,
+                fallback_used=True
+            )
+        
+        # Si c'est déjà un IntentResult, le retourner directement
+        if hasattr(detection_result, 'command_type'):
+            return detection_result
+        
+        # Si c'est un tuple (command, confidence, metadata)
+        if isinstance(detection_result, tuple) and len(detection_result) >= 2:
+            command_type, confidence = detection_result[:2]
+            metadata = detection_result[2] if len(detection_result) > 2 else {}
+            
+            return IntentResult(
+                command_type=command_type,
+                confidence=confidence,
+                method_used=method_used,
+                parameters=metadata,
+                processing_time=processing_time,
+                fallback_used=False
+            )
+        
+        # Cas de fallback
+        return IntentResult(
+            command_type=CommandType.PROMPT,
+            confidence=0.0,
+            method_used="fallback",
+            parameters={},
+            processing_time=processing_time,
+            fallback_used=True
+        )
 
     def get_performance_stats(self) -> Dict[str, Any]:
         """Retourne les statistiques de performance."""

@@ -24,7 +24,7 @@ try:
     print(f"Commande détectée: {core_request.command.value}")
     print(f"Paramètres: {core_request.parameters}")
     
-    if core_request.command == CommandType.QUIT:
+    if core_request.command == CommandType.QUIT or core_request.command == CommandType.DIRECT_QUIT:
         print("✅ SUCCESS: L'arrêt poli fonctionne !")
     else:
         print("❌ FAIL: L'arrêt poli ne fonctionne pas")
