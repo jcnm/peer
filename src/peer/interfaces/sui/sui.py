@@ -59,6 +59,14 @@ from peer.core import PeerDaemon, CoreRequest, CoreResponse, CommandType, Respon
 from peer.core.protocol import InterfaceAdapter
 from peer.infrastructure.adapters.simple_tts_adapter import SimpleTTSAdapter
 
+# Import du nouveau moteur NLP hybride
+try:
+    from .nlp_engine import HybridNLPEngine
+    NLP_ENGINE_AVAILABLE = True
+except ImportError as e:
+    print(f"⚠️ Moteur NLP hybride non disponible: {e}")
+    NLP_ENGINE_AVAILABLE = False
+
 
 @dataclass
 class SpeechRecognitionResult:
@@ -111,8 +119,12 @@ class IntelligentSUISpeechAdapter(InterfaceAdapter):
         super().__init__(InterfaceType.SUI)
         self.logger = logging.getLogger("IntelligentSUISpeechAdapter")
         
-        # Architecture IA avec BERT
-        self._init_bert_intelligence()
+        # Initialisation du nouveau moteur NLP hybride
+        self._init_hybrid_nlp_engine()
+        
+        # Architecture IA avec BERT (fallback si moteur hybride indisponible)
+        if not hasattr(self, 'nlp_engine') or not self.nlp_engine:
+            self._init_bert_intelligence()
         
         # Mapping étendu des commandes vocales pour rétrocompatibilité
         self.voice_commands = {
@@ -206,6 +218,37 @@ class IntelligentSUISpeechAdapter(InterfaceAdapter):
         self.command_patterns = defaultdict(int)
         self.response_times = deque(maxlen=20)
         self.user_preferences = self._load_user_preferences()
+    
+    def _init_hybrid_nlp_engine(self):
+        """Initialise le moteur NLP hybride robuste."""
+        try:
+            if NLP_ENGINE_AVAILABLE:
+                self.logger.info("🧠 Initialisation du moteur NLP hybride...")
+                self.nlp_engine = HybridNLPEngine()
+                self.hybrid_nlp_enabled = True
+                
+                # Compatibilité avec l'ancien système BERT
+                stats = self.nlp_engine.get_performance_stats()
+                models = stats.get("models_available", {})
+                self.bert_enabled = models.get("bert", False)
+                
+                self.logger.info("✅ Moteur NLP hybride initialisé avec succès")
+                
+                # Afficher les modèles disponibles
+                available_models = [name for name, available in models.items() if available]
+                self.logger.info(f"📊 Modèles NLP disponibles: {', '.join(available_models) if available_models else 'Aucun'}")
+                
+            else:
+                self.logger.warning("⚠️ Moteur NLP hybride non disponible")
+                self.nlp_engine = None
+                self.hybrid_nlp_enabled = False
+                self.bert_enabled = False
+                
+        except Exception as e:
+            self.logger.error(f"❌ Erreur lors de l'initialisation du moteur NLP hybride: {e}")
+            self.nlp_engine = None
+            self.hybrid_nlp_enabled = False
+            self.bert_enabled = False
     
     def _init_bert_intelligence(self):
         """Initialise l'intelligence BERT pour l'interprétation des commandes vocales."""
@@ -426,7 +469,8 @@ class IntelligentSUISpeechAdapter(InterfaceAdapter):
         if self.user_preferences.get("proactive_assistance", True):
             proactive_suggestions = self._generate_proactive_suggestions(core_response)
         
-        return {
+        # Gestion spéciale pour les nouvelles réponses de quit avec confirmation
+        response_data = {
             "vocal_message": vocal_message,
             "should_vocalize": True,
             "original_response": core_response,
@@ -438,6 +482,61 @@ class IntelligentSUISpeechAdapter(InterfaceAdapter):
                 "volume": self.user_preferences.get("voice_volume", 0.8)
             }
         }
+        
+        # Gestion des nouvelles réponses avec confirmation intelligente
+        if hasattr(core_response, 'data') and core_response.data:
+            response_params = core_response.data
+            
+            # DIRECT_QUIT avec confirmation nécessaire
+            if response_params.get("confirmation_needed") and response_params.get("confirmation_message"):
+                response_data.update({
+                    "requires_confirmation": True,
+                    "confirmation_message": response_params.get("confirmation_message"),
+                    "confirmation_type": "precision_request",
+                    "original_command_type": "DIRECT_QUIT" if "direct_quit" in response_params.get("reason", "") else "SOFT_QUIT",
+                    "reason": response_params.get("reason", ""),
+                    "vocal_message": response_params.get("confirmation_message")
+                })
+                
+            # SOFT_QUIT avec demande de précision
+            elif response_params.get("precision_needed"):
+                response_data.update({
+                    "requires_confirmation": True,
+                    "confirmation_message": response_params.get("confirmation_message", "Souhaitez-vous que je m'arrête ?"),
+                    "confirmation_type": "soft_quit_clarification",
+                    "original_command_type": "SOFT_QUIT",
+                    "reason": response_params.get("reason", ""),
+                    "vocal_message": response_params.get("confirmation_message", "Souhaitez-vous que je m'arrête ?")
+                })
+                
+            # Séquences de commandes avec SOFT_QUIT
+            elif response_params.get("is_command_sequence"):
+                command_sequence = response_params.get("command_sequence", [])
+                sequence_description = response_params.get("sequence_description", "")
+                
+                response_data.update({
+                    "is_command_sequence": True,
+                    "command_sequence": command_sequence,
+                    "sequence_description": sequence_description,
+                    "vocal_message": sequence_description,
+                    "requires_confirmation": response_params.get("confirmation_needed", False)
+                })
+                
+                if response_params.get("confirmation_needed"):
+                    response_data.update({
+                        "confirmation_message": response_params.get("confirmation_message", "Comment souhaitez-vous procéder ?"),
+                        "confirmation_type": "command_sequence_clarification"
+                    })
+            
+            # DIRECT_QUIT immédiat (fin de phrase)
+            elif response_params.get("immediate_quit"):
+                response_data.update({
+                    "immediate_quit": True,
+                    "should_vocalize": True,
+                    "vocal_message": "Au revoir !"
+                })
+        
+        return response_data
     
     def _normalize_speech_input(self, speech_input: str) -> str:
         """Normalisation avancée de l'entrée vocale."""
@@ -464,10 +563,18 @@ class IntelligentSUISpeechAdapter(InterfaceAdapter):
     
     def _parse_intelligent_speech_command(self, normalized_input: str, context: Dict[str, Any]) -> Tuple[CommandType, Dict[str, Any]]:
         """
-        Analyse intelligente des commandes avec BERT - Agent IA de premier niveau.
+        Analyse intelligente des commandes avec moteur NLP hybride - Agent IA de premier niveau.
         
         Architecture : SUI comme agent IA intelligent qui extrait les commandes
         et opérations, puis transmet les instructions non-reconnues à l'agent central.
+        
+        Priorités d'analyse:
+        1. Détection d'arrêt poli (priorité absolue)
+        2. Moteur NLP hybride (efficace et robuste)
+        3. BERT legacy (si hybride indisponible)
+        4. Correspondance directe (rétrocompatibilité)
+        5. Analyse contextuelle et sémantique
+        6. Transmission à l'agent IA central
         """
         
         # PRIORITÉ 1: Détection des intentions d'arrêt polies (toujours en priorité absolue)
@@ -475,15 +582,35 @@ class IntelligentSUISpeechAdapter(InterfaceAdapter):
             self.logger.info(f"🛑 Intention d'arrêt polie détectée: '{normalized_input}'")
             return CommandType.QUIT, {"intent": "polite_quit", "full_text": normalized_input}
         
-        # PRIORITÉ 2: Intelligence artificielle BERT (si disponible)
+        # PRIORITÉ 2: Moteur NLP hybride (nouveau système efficace)
+        if self.hybrid_nlp_enabled and self.nlp_engine:
+            try:
+                nlp_result = self.nlp_engine.extract_intent(normalized_input, context)
+                if nlp_result and nlp_result.confidence >= 0.7:
+                    parameters = {
+                        "full_text": normalized_input,
+                        "nlp_confidence": nlp_result.confidence,
+                        "nlp_method": nlp_result.method_used,
+                        "processing_time": nlp_result.processing_time,
+                        "fallback_used": nlp_result.fallback_used,
+                        **nlp_result.parameters
+                    }
+                    self.logger.info(f"🧠 NLP Hybride: {nlp_result.command_type.value} (confiance: {nlp_result.confidence:.2f}, méthode: {nlp_result.method_used})")
+                    return nlp_result.command_type, parameters
+                else:
+                    self.logger.debug(f"🔍 NLP hybride: confiance insuffisante ({nlp_result.confidence:.2f})")
+            except Exception as e:
+                self.logger.warning(f"⚠️ Erreur moteur NLP hybride: {e}")
+        
+        # PRIORITÉ 3: Intelligence artificielle BERT legacy (si hybride indisponible)
         if self.bert_enabled:
             bert_result = self._analyze_with_bert_intelligence(normalized_input, context)
             if bert_result:
                 command_type, parameters = bert_result
-                self.logger.info(f"🧠 BERT a identifié: {command_type.value} (confiance: {parameters.get('bert_confidence', 0):.2f})")
+                self.logger.info(f"🧠 BERT legacy: {command_type.value} (confiance: {parameters.get('bert_confidence', 0):.2f})")
                 return command_type, parameters
         
-        # PRIORITÉ 3: Rétrocompatibilité - Recherche de correspondance directe
+        # PRIORITÉ 4: Rétrocompatibilité - Recherche de correspondance directe
         # Amélioration: Correspondance plus stricte pour éviter les faux positifs
         for trigger, command in self.voice_commands.items():
             # Correspondance exacte ou au début pour éviter les conflits
@@ -498,7 +625,7 @@ class IntelligentSUISpeechAdapter(InterfaceAdapter):
                 self.logger.debug(f"🔄 Correspondance directe trouvée: {trigger} -> {command.value}")
                 return command, parameters
         
-        # PRIORITÉ 4: Analyse contextuelle avancée (fallback)
+        # PRIORITÉ 5: Analyse contextuelle avancée (fallback)
         if self.user_preferences.get("context_awareness", True):
             contextual_command = self._analyze_contextual_intent(normalized_input, context)
             if contextual_command:
@@ -507,7 +634,7 @@ class IntelligentSUISpeechAdapter(InterfaceAdapter):
                 self.logger.debug(f"🎯 Analyse contextuelle: {command_type.value}")
                 return command_type, parameters
         
-        # PRIORITÉ 5: Analyse par mots-clés sémantiques (fallback)
+        # PRIORITÉ 6: Analyse par mots-clés sémantiques (fallback)
         semantic_command = self._analyze_semantic_intent(normalized_input)
         if semantic_command:
             command_type, parameters = semantic_command
@@ -515,7 +642,7 @@ class IntelligentSUISpeechAdapter(InterfaceAdapter):
             self.logger.debug(f"🔍 Analyse sémantique: {command_type.value}")
             return command_type, parameters
         
-        # PRIORITÉ 6: Transmission à l'agent IA central (commande par défaut)
+        # PRIORITÉ 7: Transmission à l'agent IA central (commande par défaut)
         self.logger.info(f"🤖 Transmission à l'agent IA central: '{normalized_input}'")
         return CommandType.PROMPT, {
             "args": normalized_input.split(), 
@@ -858,31 +985,6 @@ class IntelligentSUISpeechAdapter(InterfaceAdapter):
             
             elif intent in ["explanation_request"]:
                 # Chercher ce qui doit être expliqué
-                explain_indicators = ["qu'est-ce", "comment", "pourquoi"]
-                for indicator in explain_indicators:
-                    if indicator in normalized_input:
-                        remaining = normalized_input.split(indicator, 1)
-                        if len(remaining) > 1:
-                            parameters["explanation_target"] = remaining[1].strip()
-                            break
-            
-            # Extraire les arguments généraux
-            if len(words) > 1:
-                parameters["args"] = words
-            
-            return parameters
-            
-        except Exception as e:
-            self.logger.error(f"❌ Erreur lors de l'extraction de paramètres BERT: {e}")
-            return parameters
-    
-    def _update_bert_learning(self, normalized_input: str, intent: str, confidence: float):
-        """Met à jour l'apprentissage adaptatif de BERT."""
-        try:
-            # Enregistrer les patterns réussis pour améliorer la reconnaissance
-            if confidence > 0.8:  # Haute confiance
-                if intent not in self.frequent_patterns:
-                    self.frequent_patterns[intent] = []
                 
                 self.frequent_patterns[intent].append({
                     "text": normalized_input,
@@ -944,84 +1046,96 @@ class IntelligentSUISpeechAdapter(InterfaceAdapter):
         return None
     
     def _analyze_semantic_intent(self, normalized_input: str) -> Optional[Tuple[CommandType, Dict[str, Any]]]:
-        """Analyse sémantique pour détecter l'intention - VERSION SÉLECTIVE."""
+        """Analyse sémantique très sélective - privilégie la transmission à l'agent central."""
         
-        # Version plus stricte pour éviter les faux positifs
-        # Ne détecter que des intentions très claires et courtes
+        # STRATÉGIE: Être très conservateur pour éviter les faux positifs
+        # Laisser l'agent central gérer les requêtes complexes
         
-        # Ignorer les requêtes trop longues (probablement pour l'agent IA central)
-        if len(normalized_input.split()) > 5:
-            return None
+        # Ne traiter que des commandes TRÈS simples et directes
+        if len(normalized_input.split()) > 3:
+            return None  # Trop complexe, laisser à l'agent central
         
-        # Mots-clés EXACTS pour des intentions simples uniquement
-        exact_patterns = {
-            CommandType.HELP: ["aide moi", "help me", "comment faire", "how to"],
-            CommandType.STATUS: ["ça va", "ça marche", "état système", "system status"],
-            CommandType.ANALYZE: ["regarde ça", "examine ça", "vérifie ça"],
-            CommandType.EXPLAIN: ["explique ça", "dis moi", "qu'est-ce"],
+        # Patterns ultra-simples uniquement (mots seuls ou très courts)
+        ultra_simple_patterns = {
+            CommandType.HELP: ["aide", "help"],
+            CommandType.STATUS: ["statut", "état", "status"],
+            CommandType.TIME: ["heure", "time"],
         }
         
-        # Correspondance exacte seulement pour éviter les conflits
-        for command_type, patterns in exact_patterns.items():
+        # Correspondance exacte pour des mots très simples uniquement
+        for command_type, patterns in ultra_simple_patterns.items():
             for pattern in patterns:
-                if pattern in normalized_input and len(normalized_input) <= len(pattern) + 3:
-                    return command_type, {"intent": "semantic_match", "full_text": normalized_input}
+                if normalized_input.strip() == pattern:
+                    return command_type, {"intent": "ultra_simple_match", "full_text": normalized_input}
         
-        # Retourner None pour laisser passer vers l'agent IA central
+        # Tout le reste va à l'agent central
         return None
     
     def _detect_polite_quit_intent(self, normalized_input: str) -> bool:
-        """Détecte les intentions d'arrêt polies dans le texte."""
-        # Patterns spécifiques pour les intentions d'arrêt polies
-        quit_patterns = [
-            # Phrases de remerciement + arrêt
-            r"merci.*(?:arrêt|stop|quitt|fini|terminé|ça suffit)",
-            r"merci.*tu peux.*(?:arrêt|stop|quitt)",
-            r"merci pour.*(?:aide|assistance).*(?:arrêt|stop|quitt|tu peux t'arrêter)",
-            r"merci.*(?:de ton aide|pour ton aide|pour tout|beaucoup)",
-            
-            # Formules de politesse + arrêt
-            r"(?:c'est bon|c'est parfait|ça suffit).*(?:arrêt|stop|quitt|merci)",
-            r"(?:c'est bon|c'est parfait|parfait).*merci",
-            r"(?:au revoir|à bientôt|bye|goodbye).*(?:arrêt|stop|quitt|merci)",
-            r"(?:bonne journée|bonne soirée).*(?:arrêt|stop|quitt|merci)",
-            
-            # Intentions directes mais polies
-            r"tu peux.*(?:arrêt|stop|quitt|partir|t'en aller|te reposer)",
-            r"(?:arrête|stop).*(?:maintenant|stp|s'il te plaît|merci)",
-            r"j'ai fini.*(?:merci|au revoir)",
-            r"c'est tout.*(?:merci|au revoir)",
-            
-            # Demandes polies d'arrêt
-            r"(?:peux-tu|pourrais-tu).*(?:arrêt|stop|quitt|t'arrêter)",
-            r"(?:tu peux|vous pouvez).*(?:arrêt|stop|quitt|partir)",
-            
-            # Patterns supplémentaires pour les cas manqués
-            r"(?:parfait|excellent|super|génial|formidable).*merci.*(?:aide|assistance|travail)",
-            r"merci.*(?:c'est exactement|exactement ce qu'il|ce qu'il me fallait)",
-            r"(?:très bien|excellent travail).*(?:arrête|stop|tu peux)",
-            r"(?:formidable|génial).*tu peux.*reposer",
-            r"bon.*merci pour tout",
+        """Détecte les intentions d'arrêt polies avec logique très stricte pour éviter les faux positifs."""
+        import re
+        
+        # EXCLUSIONS STRICTES : Si ces patterns sont présents, ce n'est JAMAIS un quit
+        exclusion_patterns = [
+            # Demandes d'aide explicites
+            r"(?:aide|help|aidez?[-\s]moi|assiste[-\s]moi)",
+            r"(?:explique|expliquer|comment|pourquoi|que fait|comment faire)",
+            r"(?:analyse|analyser|examine|examiner|regarde|vérifie)",
+            r"(?:optimise|optimiser|améliore|améliorer|suggère|suggérer)",
+            r"(?:peux[-\s]tu|pourrais[-\s]tu|tu peux).+(?:aide|expliquer|analyser|optimiser|faire)",
+            r"(?:dis[-\s]moi|montre[-\s]moi|raconte[-\s]moi)",
+            # Actions spécifiques demandées
+            r"(?:code|fichier|fonction|classe|variable|méthode|projet)",
+            r"(?:débug|debug|erreur|problème|bug)",
+            r"(?:créer|créé|modifier|modifie|ajouter|ajoute)",
+            # Phrases mixtes avec remerciement + demande
+            r"merci.+(?:aide|analyse|explique|optimise|montre|dis|fait|peux)"
         ]
         
-        import re
-        for pattern in quit_patterns:
+        # Si n'importe quel pattern d'exclusion correspond, ce n'est PAS un quit
+        for pattern in exclusion_patterns:
+            if re.search(pattern, normalized_input, re.IGNORECASE):
+                return False
+        
+        # PATTERNS D'ARRÊT TRÈS SPÉCIFIQUES - seulement si aucune exclusion
+        strict_quit_patterns = [
+            # Remerciements de fin SANS demande d'action
+            r"^merci\s+(?:beaucoup|bien|pour\s+tout|c'est\s+parfait|c'est\s+bon)$",
+            r"^(?:c'est\s+parfait|c'est\s+bon|parfait|excellent)\s*(?:merci)?$",
+            r"^merci\s+(?:tu\s+peux\s+t'arrêter|pour\s+ton\s+aide)$",
+            
+            # Formules d'au revoir claires
+            r"^(?:au\s+revoir|à\s+bientôt|bye|goodbye|bonne\s+journée|bonne\s+soirée)$",
+            
+            # Demandes d'arrêt explicites
+            r"^(?:arrête|stop|tu\s+peux\s+arrêter|arrête[-\s]toi)(?:\s+maintenant|\s+stp|\s+merci)?$",
+            r"^(?:ça\s+suffit|c'est\s+tout|j'ai\s+fini)(?:\s+merci)?$",
+            
+            # Combinaisons très spécifiques de politesse + arrêt
+            r"merci\s+(?:tu\s+peux\s+(?:partir|te\s+reposer|t'en\s+aller)|pour\s+tout\s+au\s+revoir)",
+            r"(?:très\s+bien|excellent)\s+merci\s+(?:arrête|tu\s+peux\s+arrêter)"
+        ]
+        
+        # Vérifier les patterns d'arrêt très stricts uniquement
+        for pattern in strict_quit_patterns:
             if re.search(pattern, normalized_input, re.IGNORECASE):
                 return True
         
-        # Vérifier aussi les mots-clés de politesse + contexte d'arrêt
-        polite_words = ["merci", "c'est bon", "c'est parfait", "parfait", "ça suffit", "au revoir", "bye", "goodbye", 
-                       "super", "génial", "formidable", "excellent", "très bien"]
-        quit_words = ["arrêt", "stop", "quitt", "fini", "terminé", "partir", "t'arrêter", "te reposer", "pour tout"]
+        # Logique supplémentaire pour "merci" seul avec satisfaction finale
+        if "merci" in normalized_input:
+            # Mots qui indiquent une satisfaction/fin
+            satisfaction_words = ["exactement", "ce qu'il me fallait", "c'est tout", "pour tout", "beaucoup"]
+            # Mots qui indiquent clairement une demande continue
+            continuation_words = ["pour", "de", "explique", "analyse", "optimise", "comment", "peux-tu", "aide"]
+            
+            has_satisfaction = any(word in normalized_input for word in satisfaction_words)
+            has_continuation = any(word in normalized_input for word in continuation_words)
+            
+            # Si "merci" + satisfaction ET PAS de continuation, c'est probablement un quit
+            if has_satisfaction and not has_continuation:
+                return True
         
-        has_polite = any(word in normalized_input for word in polite_words)
-        has_quit = any(word in normalized_input for word in quit_words)
-        
-        # Pattern spécial : "merci" + indication de satisfaction
-        satisfaction_words = ["exactement", "ce qu'il me fallait", "parfait", "excellent", "super", "génial"]
-        has_satisfaction = any(word in normalized_input for word in satisfaction_words)
-        
-        return (has_polite and has_quit) or ("merci" in normalized_input and has_satisfaction)
+        return False
 
     def _adapt_message_for_intelligent_speech(self, message: str, response_style: str) -> str:
         """Adaptation intelligente du message selon le style de réponse."""
@@ -1251,6 +1365,10 @@ class OmniscientSUI:
         self.current_status = "🔄 Initialisation..."
         self.status_lock = threading.Lock()
         self.show_visual_indicators = True
+        
+        # Système de confirmation intelligent
+        self._await_confirmation = False
+        self._confirmation_context = None
         
         # Initialisation des composants
         self._init_advanced_speech_recognition()
@@ -2332,6 +2450,11 @@ class OmniscientSUI:
             if self.paused:
                 self.logger.debug("Interface en pause, commande ignorée")
                 return
+
+            # Gestion spéciale des confirmations en attente
+            if hasattr(self, '_await_confirmation') and self._await_confirmation:
+                self._process_confirmation_response(speech_text)
+                return
             
             # Vérifier si on n'est pas déjà en train de traiter une commande critique
             if hasattr(self, '_processing_critical_command') and self._processing_critical_command:
@@ -2352,6 +2475,23 @@ class OmniscientSUI:
 
             # Traduire la réponse pour l'interface vocale
             adapted_response = self.adapter.translate_from_core(response)
+
+            # Gestion spéciale des nouvelles réponses avec confirmation
+            if adapted_response.get("immediate_quit"):
+                # DIRECT_QUIT immédiat (fin de phrase) - arrêt sans confirmation
+                self._safe_vocalize(adapted_response.get("vocal_message", "Au revoir !"))
+                self.stop()
+                return
+                
+            elif adapted_response.get("requires_confirmation"):
+                # Demande de confirmation intelligente
+                self._handle_confirmation_request(adapted_response, speech_text)
+                return
+                
+            elif adapted_response.get("is_command_sequence"):
+                # Séquence de commandes détectée
+                self._handle_command_sequence(adapted_response)
+                return
 
             # Vocaliser la réponse avec protection anti-récursion
             if adapted_response.get("should_vocalize", True):
@@ -2519,6 +2659,164 @@ class OmniscientSUI:
         
         # Log pour debugging mais pas de vocalisation
         self.logger.debug(f"Erreur de commande détaillée: {error}")
+
+    def _handle_confirmation_request(self, adapted_response: dict, original_text: str):
+        """Gère les demandes de confirmation intelligentes pour les commandes d'arrêt ambiguës."""
+        self.logger.info(f"Demande de confirmation reçue pour: {original_text}")
+        
+        # Extraire les informations de la réponse
+        confirmation_message = adapted_response.get("vocal_message", "Voulez-vous vraiment arrêter ?")
+        quit_type = adapted_response.get("quit_type", "SOFT_QUIT")
+        detected_commands = adapted_response.get("detected_commands", [])
+        
+        # Vocaliser la demande de confirmation
+        self._safe_vocalize(confirmation_message)
+        
+        # Attendre une réponse de confirmation
+        self.logger.debug("Attente de confirmation utilisateur...")
+        
+        # Configurer une écoute spéciale pour la confirmation
+        if hasattr(self, '_await_confirmation'):
+            self._await_confirmation = True
+            self._confirmation_context = {
+                "original_text": original_text,
+                "quit_type": quit_type,
+                "detected_commands": detected_commands,
+                "timeout": time.time() + 30  # 30 secondes de timeout
+            }
+        else:
+            # Fallback: traiter comme une commande normale avec contexte
+            self.logger.warning("Système de confirmation non disponible - traitement direct")
+            if quit_type == "DIRECT_QUIT":
+                self._safe_vocalize("Au revoir !")
+                self.stop()
+
+    def _handle_command_sequence(self, adapted_response: dict):
+        """Gère l'exécution de séquences de commandes détectées."""
+        commands = adapted_response.get("command_sequence", [])
+        sequence_message = adapted_response.get("vocal_message", "Plusieurs commandes détectées.")
+        
+        self.logger.info(f"Traitement de séquence de {len(commands)} commandes")
+        
+        # Vocaliser le message d'introduction de la séquence
+        self._safe_vocalize(sequence_message)
+        
+        # Exécuter chaque commande de la séquence
+        for i, command_info in enumerate(commands):
+            try:
+                command_type = command_info.get("command")
+                command_text = command_info.get("text", "")
+                command_confidence = command_info.get("confidence", 0.0)
+                
+                self.logger.debug(f"Exécution commande {i+1}/{len(commands)}: {command_type} (confiance: {command_confidence:.2f})")
+                
+                # Créer une requête pour cette commande spécifique
+                from peer.core.api import CoreRequest, CommandType
+                
+                # Mapper le type de commande
+                core_command_type = getattr(CommandType, command_type.upper(), CommandType.PROMPT)
+                
+                request = CoreRequest(
+                    command=core_command_type,
+                    text=command_text,
+                    session_id=self.session_id,
+                    metadata={
+                        "source": "sequence",
+                        "sequence_position": i + 1,
+                        "sequence_total": len(commands),
+                        "confidence": command_confidence
+                    }
+                )
+                
+                # Exécuter la commande via le daemon
+                response = self.daemon.execute_command(request)
+                
+                # Traiter la réponse
+                if response and response.text:
+                    # Vocaliser la réponse si approprié
+                    if core_command_type != CommandType.QUIT:  # Éviter la vocalisation pour les quits
+                        self._safe_vocalize(response.text)
+                
+                # Pause courte entre les commandes
+                if i < len(commands) - 1:  # Pas de pause après la dernière commande
+                    time.sleep(0.5)
+                    
+            except Exception as e:
+                self.logger.error(f"Erreur lors de l'exécution de la commande {i+1}: {e}")
+                self._safe_vocalize(f"Erreur lors de l'exécution de la commande {i+1}")
+
+    def _process_confirmation_response(self, response_text: str):
+        """Traite la réponse de l'utilisateur à une demande de confirmation."""
+        if not hasattr(self, '_confirmation_context'):
+            self.logger.warning("Réponse de confirmation reçue mais pas de contexte disponible")
+            self._await_confirmation = False
+            return
+        
+        context = self._confirmation_context
+        response_lower = response_text.lower().strip()
+        
+        # Vérifier le timeout
+        if time.time() > context.get("timeout", 0):
+            self.logger.info("Timeout de confirmation - annulation")
+            self._safe_vocalize("Timeout de confirmation. Action annulée.")
+            self._await_confirmation = False
+            delattr(self, '_confirmation_context')
+            return
+        
+        # Analyser la réponse de confirmation
+        positive_responses = [
+            "oui", "yes", "ok", "d'accord", "confirme", "confirmer",
+            "vas-y", "allez-y", "go", "continue", "arrête", "stop",
+            "ferme", "quit", "quitte", "bye", "au revoir", "c'est ça"
+        ]
+        
+        negative_responses = [
+            "non", "no", "annule", "annuler", "cancel", "pas maintenant",
+            "pas encore", "attends", "stop", "ne fais pas", "n'arrête pas"
+        ]
+        
+        is_positive = any(pos in response_lower for pos in positive_responses)
+        is_negative = any(neg in response_lower for neg in negative_responses)
+        
+        self.logger.info(f"Réponse de confirmation: '{response_text}' -> positive: {is_positive}, negative: {is_negative}")
+        
+        if is_positive and not is_negative:
+            # Confirmation positive
+            quit_type = context.get("quit_type", "SOFT_QUIT")
+            
+            if quit_type == "DIRECT_QUIT":
+                self._safe_vocalize("D'accord, j'arrête.")
+                self.stop()
+            elif quit_type == "SOFT_QUIT":
+                self._safe_vocalize("D'accord, au revoir !")
+                self.stop()
+            else:
+                # Exécuter les commandes détectées
+                commands = context.get("detected_commands", [])
+                if commands:
+                    self._safe_vocalize("D'accord, j'exécute les commandes.")
+                    # Créer une réponse de séquence simulée
+                    sequence_response = {
+                        "command_sequence": commands,
+                        "vocal_message": "Exécution des commandes confirmées."
+                    }
+                    self._handle_command_sequence(sequence_response)
+                
+        elif is_negative:
+            # Confirmation négative
+            self._safe_vocalize("D'accord, je continue.")
+            
+        else:
+            # Réponse ambiguë - redemander
+            self._safe_vocalize("Je n'ai pas bien compris. Pouvez-vous dire 'oui' ou 'non' ?")
+            # Prolonger le timeout
+            context["timeout"] = time.time() + 15
+            return  # Ne pas nettoyer le contexte, attendre une nouvelle réponse
+        
+        # Nettoyer le contexte de confirmation
+        self._await_confirmation = False
+        if hasattr(self, '_confirmation_context'):
+            delattr(self, '_confirmation_context')
 
     def _record_single_speech_session(self, stream) -> Optional[bytes]:
         """Enregistre une session de parole unique jusqu'à détection complète."""

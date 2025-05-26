@@ -57,6 +57,8 @@ class CommandType(Enum):
     TIME = "time"
     DATE = "date"
     QUIT = "quit"
+    DIRECT_QUIT = "direct_quit"  # Arrêt immédiat sans confirmation
+    SOFT_QUIT = "soft_quit"      # Arrêt avec demande de confirmation
     
     # Mode switching
     MODE_SWITCH = "mode_switch"
