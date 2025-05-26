@@ -56,6 +56,7 @@ class CommandType(Enum):
     ECHO = "echo"
     TIME = "time"
     DATE = "date"
+    QUIT = "quit"
     
     # Mode switching
     MODE_SWITCH = "mode_switch"

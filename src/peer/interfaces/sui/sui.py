@@ -17,6 +17,7 @@ import json
 import math
 import datetime
 import psutil
+import numpy as np
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple, Union
 from dataclasses import dataclass, asdict
@@ -43,10 +44,14 @@ try:
     import pyttsx3
     from pydantic import BaseModel
     import webrtcvad  # Pour une meilleure détection d'activité vocale
+    # Dépendances pour l'IA intelligente avec BERT
+    from transformers import AutoTokenizer, AutoModel, pipeline
+    import torch
+    import torch.nn.functional as F
 except ImportError as e:
     print(f"Erreur lors du chargement des dépendances: {e}")
     print("Veuillez installer les dépendances requises:")
-    print("  pip install pyaudio numpy pyttsx3 openai-whisper webrtcvad")
+    print("  pip install pyaudio numpy pyttsx3 openai-whisper webrtcvad transformers torch")
     sys.exit(1)
 
 # Importation des modules Peer refactorisés
@@ -95,14 +100,21 @@ class ContextualInfo:
 class IntelligentSUISpeechAdapter(InterfaceAdapter):
     """
     Adaptateur intelligent pour l'interface vocale (SUI) avec capacités
-    d'analyse contextuelle et assistance proactive.
+    d'analyse contextuelle et assistance proactive utilisant BERT.
+    
+    Architecture IA : Premier niveau d'agent intelligent qui analyse
+    les commandes vocales avec BERT et transmet les instructions
+    non-reconnues à l'agent IA central.
     """
     
     def __init__(self):
         super().__init__(InterfaceType.SUI)
         self.logger = logging.getLogger("IntelligentSUISpeechAdapter")
         
-        # Mapping étendu des commandes vocales
+        # Architecture IA avec BERT
+        self._init_bert_intelligence()
+        
+        # Mapping étendu des commandes vocales pour rétrocompatibilité
         self.voice_commands = {
             # Commandes de base français
             "aide": CommandType.HELP,
@@ -141,6 +153,30 @@ class IntelligentSUISpeechAdapter(InterfaceAdapter):
             "alerte": CommandType.STATUS,    # Alertes = statut/info
             "notifie": CommandType.STATUS,
             
+            # Commandes d'arrêt et de politesse
+            "arrête": CommandType.QUIT,
+            "arrête": CommandType.QUIT,
+            "stop": CommandType.QUIT,
+            "quitter": CommandType.QUIT,
+            "quit": CommandType.QUIT,
+            "au revoir": CommandType.QUIT,
+            "merci": CommandType.QUIT,
+            "c'est bon": CommandType.QUIT,
+            "ça suffit": CommandType.QUIT,
+            "tu peux t'arrêter": CommandType.QUIT,
+            "arrête-toi": CommandType.QUIT,
+            "merci pour ton aide": CommandType.QUIT,
+            "merci beaucoup": CommandType.QUIT,
+            "c'est parfait": CommandType.QUIT,
+            "fini": CommandType.QUIT,
+            "terminé": CommandType.QUIT,
+            "bye": CommandType.QUIT,
+            "goodbye": CommandType.QUIT,
+            "see you": CommandType.QUIT,
+            "à bientôt": CommandType.QUIT,
+            "bonne journée": CommandType.QUIT,
+            "bonne soirée": CommandType.QUIT,
+            
             # Commandes anglaises
             "what time": CommandType.TIME,
             "what date": CommandType.DATE,
@@ -170,6 +206,147 @@ class IntelligentSUISpeechAdapter(InterfaceAdapter):
         self.command_patterns = defaultdict(int)
         self.response_times = deque(maxlen=20)
         self.user_preferences = self._load_user_preferences()
+    
+    def _init_bert_intelligence(self):
+        """Initialise l'intelligence BERT pour l'interprétation des commandes vocales."""
+        try:
+            self.logger.info("🧠 Initialisation de l'agent IA BERT pour SUI...")
+            
+            # Liste des modèles par ordre de préférence
+            models_to_try = [
+                "bert-base-multilingual-cased",  # Modèle multilingue incluant le français
+                "distilbert-base-multilingual-cased",  # Version plus légère
+                "bert-base-uncased"  # Fallback anglais
+            ]
+            
+            model_loaded = False
+            for model_name in models_to_try:
+                try:
+                    self.logger.info(f"📥 Tentative de chargement: {model_name}")
+                    
+                    # Tokenizer et modèle BERT avec configuration compatible
+                    self.bert_tokenizer = AutoTokenizer.from_pretrained(model_name)
+                    
+                    # Configuration du modèle pour éviter les problèmes de compatibilité
+                    try:
+                        # Essayer sans spécifier de device
+                        self.bert_model = AutoModel.from_pretrained(
+                            model_name,
+                            output_hidden_states=True,
+                            output_attentions=False
+                        )
+                        # Mettre en mode évaluation
+                        self.bert_model.eval()
+                    except Exception as model_error:
+                        self.logger.warning(f"⚠️ Erreur modèle {model_name}: {model_error}")
+                        # Essayer une configuration plus simple
+                        self.bert_model = AutoModel.from_pretrained(model_name)
+                        self.bert_model.eval()
+                    
+                    model_loaded = True
+                    self.logger.info(f"✅ Modèle chargé avec succès: {model_name}")
+                    break
+                except Exception as e:
+                    self.logger.warning(f"⚠️ Échec chargement {model_name}: {e}")
+                    continue
+            
+            if not model_loaded:
+                raise Exception("Aucun modèle BERT disponible")
+            
+            
+            # Pipeline de classification d'intention optimisé
+            try:
+                self.intent_classifier = pipeline(
+                    "text-classification",
+                    model=self.bert_tokenizer.name_or_path,
+                    tokenizer=self.bert_tokenizer,
+                    return_all_scores=True
+                )
+                self.logger.info("🎯 Pipeline de classification initialisé")
+            except Exception as e:
+                self.logger.warning(f"⚠️ Pipeline de classification non disponible, utilisation de l'analyse directe: {e}")
+                self.intent_classifier = None
+            
+            # Configuration IA intelligente
+            self.bert_config = {
+                "max_length": 512,
+                "confidence_threshold": 0.7,
+                "intent_mapping": self._build_intent_mapping(),
+                "context_window": 3,  # Historique des 3 dernières commandes pour le contexte
+                "semantic_similarity_threshold": 0.8
+            }
+            
+            # Cache pour les embeddings fréquents
+            self.embedding_cache = {}
+            self.frequent_patterns = {}
+            
+            # Intelligence adaptative
+            self.adaptive_learning = True
+            self.command_success_rate = defaultdict(float)
+            self.user_interaction_patterns = defaultdict(list)
+            
+            self.logger.info("✅ Agent IA BERT initialisé avec succès")
+            self.bert_enabled = True
+            
+        except Exception as e:
+            self.logger.error(f"❌ Erreur lors de l'initialisation BERT: {e}")
+            self.logger.warning("🔄 Basculement vers l'analyse traditionnelle par mots-clés")
+            self.bert_enabled = False
+            self.bert_tokenizer = None
+            self.bert_model = None
+            self.intent_classifier = None
+    
+    def _build_intent_mapping(self) -> Dict[str, CommandType]:
+        """Construit le mapping des intentions BERT vers les CommandType."""
+        return {
+            # Intentions d'aide et information
+            "help_request": CommandType.HELP,
+            "information_query": CommandType.HELP,
+            "capability_inquiry": CommandType.CAPABILITIES,
+            "tutorial_request": CommandType.HELP,
+            
+            # Intentions de statut et surveillance
+            "status_check": CommandType.STATUS,
+            "health_inquiry": CommandType.STATUS,
+            "performance_check": CommandType.STATUS,
+            "monitoring_request": CommandType.STATUS,
+            
+            # Intentions d'analyse et traitement
+            "analysis_request": CommandType.ANALYZE,
+            "examination_request": CommandType.ANALYZE,
+            "inspection_request": CommandType.ANALYZE,
+            "evaluation_request": CommandType.ANALYZE,
+            
+            # Intentions d'amélioration et suggestions
+            "optimization_request": CommandType.SUGGEST,
+            "improvement_request": CommandType.SUGGEST,
+            "enhancement_request": CommandType.SUGGEST,
+            "recommendation_request": CommandType.SUGGEST,
+            
+            # Intentions d'explication
+            "explanation_request": CommandType.EXPLAIN,
+            "clarification_request": CommandType.EXPLAIN,
+            "description_request": CommandType.EXPLAIN,
+            
+            # Intentions temporelles
+            "time_inquiry": CommandType.TIME,
+            "date_inquiry": CommandType.DATE,
+            "temporal_request": CommandType.TIME,
+            
+            # Intentions d'écho et répétition
+            "repetition_request": CommandType.ECHO,
+            "echo_request": CommandType.ECHO,
+            
+            # Intentions d'arrêt (gardées pour compatibilité)
+            "termination_request": CommandType.QUIT,
+            "farewell_intent": CommandType.QUIT,
+            "stop_request": CommandType.QUIT,
+            
+            # Intention par défaut pour les requêtes complexes
+            "general_query": CommandType.PROMPT,
+            "complex_request": CommandType.PROMPT,
+            "unstructured_input": CommandType.PROMPT
+        }
     
     def _load_user_preferences(self) -> Dict[str, Any]:
         """Charge les préférences utilisateur depuis le fichier de configuration."""
@@ -286,29 +463,444 @@ class IntelligentSUISpeechAdapter(InterfaceAdapter):
         return normalized
     
     def _parse_intelligent_speech_command(self, normalized_input: str, context: Dict[str, Any]) -> Tuple[CommandType, Dict[str, Any]]:
-        """Analyse intelligente des commandes avec prise en compte du contexte."""
+        """
+        Analyse intelligente des commandes avec BERT - Agent IA de premier niveau.
         
-        # Recherche de correspondance directe
+        Architecture : SUI comme agent IA intelligent qui extrait les commandes
+        et opérations, puis transmet les instructions non-reconnues à l'agent central.
+        """
+        
+        # PRIORITÉ 1: Détection des intentions d'arrêt polies (toujours en priorité absolue)
+        if self._detect_polite_quit_intent(normalized_input):
+            self.logger.info(f"🛑 Intention d'arrêt polie détectée: '{normalized_input}'")
+            return CommandType.QUIT, {"intent": "polite_quit", "full_text": normalized_input}
+        
+        # PRIORITÉ 2: Intelligence artificielle BERT (si disponible)
+        if self.bert_enabled:
+            bert_result = self._analyze_with_bert_intelligence(normalized_input, context)
+            if bert_result:
+                command_type, parameters = bert_result
+                self.logger.info(f"🧠 BERT a identifié: {command_type.value} (confiance: {parameters.get('bert_confidence', 0):.2f})")
+                return command_type, parameters
+        
+        # PRIORITÉ 3: Rétrocompatibilité - Recherche de correspondance directe
+        # Amélioration: Correspondance plus stricte pour éviter les faux positifs
         for trigger, command in self.voice_commands.items():
-            if trigger in normalized_input:
+            # Correspondance exacte ou au début pour éviter les conflits
+            if (normalized_input == trigger or 
+                normalized_input.startswith(trigger + " ") or
+                (len(trigger) > 3 and trigger in normalized_input and 
+                 len(normalized_input.split()) <= 3)):  # Commandes courtes seulement
+                
                 parameters = self._extract_parameters(normalized_input, trigger, context)
+                parameters["fallback_method"] = "direct_mapping"
                 self.command_patterns[command.value] += 1
+                self.logger.debug(f"🔄 Correspondance directe trouvée: {trigger} -> {command.value}")
                 return command, parameters
         
-        # Analyse contextuelle avancée
+        # PRIORITÉ 4: Analyse contextuelle avancée (fallback)
         if self.user_preferences.get("context_awareness", True):
             contextual_command = self._analyze_contextual_intent(normalized_input, context)
             if contextual_command:
-                return contextual_command
+                command_type, parameters = contextual_command
+                parameters["fallback_method"] = "contextual_analysis"
+                self.logger.debug(f"🎯 Analyse contextuelle: {command_type.value}")
+                return command_type, parameters
         
-        # Analyse par mots-clés sémantiques
+        # PRIORITÉ 5: Analyse par mots-clés sémantiques (fallback)
         semantic_command = self._analyze_semantic_intent(normalized_input)
         if semantic_command:
-            return semantic_command
+            command_type, parameters = semantic_command
+            parameters["fallback_method"] = "semantic_keywords"
+            self.logger.debug(f"🔍 Analyse sémantique: {command_type.value}")
+            return command_type, parameters
         
-        # Commande par défaut - utiliser PROMPT au lieu de HELP pour les entrées utilisateur non reconnues
-        self.logger.debug(f"Commande non reconnue: '{normalized_input}', utilisation de PROMPT par défaut")
-        return CommandType.PROMPT, {"args": normalized_input.split(), "full_text": normalized_input, "unrecognized_input": normalized_input}
+        # PRIORITÉ 6: Transmission à l'agent IA central (commande par défaut)
+        self.logger.info(f"🤖 Transmission à l'agent IA central: '{normalized_input}'")
+        return CommandType.PROMPT, {
+            "args": normalized_input.split(), 
+            "full_text": normalized_input, 
+            "unrecognized_input": normalized_input,
+            "ai_agent_request": True,
+            "processing_method": "central_ai_agent"
+        }
+    
+    def _analyze_with_bert_intelligence(self, normalized_input: str, context: Dict[str, Any]) -> Optional[Tuple[CommandType, Dict[str, Any]]]:
+        """
+        Analyse intelligente avec BERT pour comprendre l'intention utilisateur.
+        
+        Retourne None si BERT ne peut pas identifier une intention claire,
+        permettant aux méthodes fallback de prendre le relais.
+        """
+        try:
+            self.logger.debug(f"🧠 Analyse BERT de: '{normalized_input}'")
+            
+            # Préparer le contexte enrichi pour BERT
+            enriched_input = self._prepare_bert_context(normalized_input, context)
+            
+            # Analyser l'intention avec BERT
+            intent_result = self._bert_intent_classification(enriched_input)
+            
+            if not intent_result:
+                self.logger.debug("🤷 BERT n'a pas identifié d'intention claire")
+                return None
+            
+            intent, confidence = intent_result
+            
+            # Vérifier le seuil de confiance
+            if confidence < self.bert_config["confidence_threshold"]:
+                self.logger.debug(f"🔽 Confiance BERT trop faible: {confidence:.2f} < {self.bert_config['confidence_threshold']}")
+                return None
+            
+            # Mapper l'intention vers CommandType
+            command_type = self.bert_config["intent_mapping"].get(intent)
+            if not command_type:
+                self.logger.debug(f"❓ Intention BERT non mappée: {intent}")
+                return None
+            
+            # Extraire les paramètres avec BERT
+            parameters = self._bert_extract_parameters(normalized_input, intent, context)
+            parameters.update({
+                "bert_intent": intent,
+                "bert_confidence": confidence,
+                "processing_method": "bert_intelligence",
+                "ai_processing": True
+            })
+            
+            # Apprentissage adaptatif
+            if self.adaptive_learning:
+                self._update_bert_learning(normalized_input, intent, confidence)
+            
+            return command_type, parameters
+            
+        except Exception as e:
+            self.logger.error(f"❌ Erreur lors de l'analyse BERT: {e}")
+            return None
+    
+    def _prepare_bert_context(self, normalized_input: str, context: Dict[str, Any]) -> str:
+        """Prépare le contexte enrichi pour l'analyse BERT."""
+        try:
+            # Contexte de base
+            enriched_parts = [normalized_input]
+            
+            # Ajouter l'historique récent si disponible
+            if hasattr(self, 'command_history') and self.command_history:
+                recent_commands = list(self.command_history)[-self.bert_config["context_window"]:]
+                if recent_commands:
+                    recent_texts = [cmd.get("text", "") for cmd in recent_commands if cmd.get("text")]
+                    if recent_texts:
+                        context_text = " | ".join(recent_texts[-2:])  # 2 dernières commandes
+                        enriched_parts.insert(0, f"Contexte: {context_text}")
+            
+            # Ajouter des indices temporels si pertinents
+            current_hour = datetime.datetime.now().hour
+            if 6 <= current_hour < 12:
+                time_context = "matinée"
+            elif 12 <= current_hour < 18:
+                time_context = "après-midi"
+            else:
+                time_context = "soirée"
+            
+            enriched_parts.append(f"Moment: {time_context}")
+            
+            # Combiner le contexte enrichi
+            enriched_input = " ".join(enriched_parts)
+            
+            # Limiter la longueur pour BERT
+            if len(enriched_input) > self.bert_config["max_length"]:
+                enriched_input = enriched_input[:self.bert_config["max_length"]]
+            
+            return enriched_input
+            
+        except Exception as e:
+            self.logger.warning(f"⚠️ Erreur lors de la préparation du contexte BERT: {e}")
+            return normalized_input
+    
+    def _bert_intent_classification(self, enriched_input: str) -> Optional[Tuple[str, float]]:
+        """Classification d'intention avec BERT."""
+        try:
+            # Utiliser les patterns d'entraînement pour classifier l'intention
+            # Pour cette implémentation, nous utiliserons une analyse par similarité sémantique
+            
+            # Obtenir les embeddings BERT pour l'entrée
+            input_embedding = self._get_bert_embedding(enriched_input)
+            
+            if input_embedding is None:
+                return None
+            
+            # Comparer avec les patterns d'intention connus
+            best_intent = None
+            best_score = 0.0
+            
+            # Patterns d'intention basés sur des exemples d'entraînement
+            intention_patterns = self._get_intention_training_patterns()
+            
+            for intent, patterns in intention_patterns.items():
+                for pattern in patterns:
+                    pattern_embedding = self._get_bert_embedding(pattern)
+                    if pattern_embedding is not None:
+                        # Calculer la similarité cosine
+                        similarity = self._cosine_similarity(input_embedding, pattern_embedding)
+                        if similarity > best_score:
+                            best_score = similarity
+                            best_intent = intent
+            
+            # Retourner le meilleur match si la similarité est suffisante
+            if best_score >= self.bert_config["semantic_similarity_threshold"]:
+                return best_intent, best_score
+            
+            return None
+            
+        except Exception as e:
+            self.logger.error(f"❌ Erreur lors de la classification BERT: {e}")
+            return None
+    
+    def _get_bert_embedding(self, text: str) -> Optional[np.ndarray]:
+        """Obtient l'embedding BERT pour un texte."""
+        try:
+            # Vérifier le cache d'abord
+            if text in self.embedding_cache:
+                return self.embedding_cache[text]
+            
+            # Vérifier que le modèle est disponible
+            if not self.bert_model or not self.bert_tokenizer:
+                return None
+            
+            # Tokeniser et obtenir l'embedding
+            inputs = self.bert_tokenizer(
+                text, 
+                return_tensors="pt", 
+                padding=True, 
+                truncation=True, 
+                max_length=512
+            )
+            
+            with torch.no_grad():
+                outputs = self.bert_model(**inputs)
+                # Utiliser la moyenne des dernières couches cachées
+                if hasattr(outputs, 'last_hidden_state'):
+                    embedding = outputs.last_hidden_state.mean(dim=1).squeeze()
+                else:
+                    # Fallback pour d'autres types de sorties
+                    embedding = outputs[0].mean(dim=1).squeeze()
+                
+                # Convertir en numpy
+                if hasattr(embedding, 'numpy'):
+                    embedding_np = embedding.numpy()
+                else:
+                    embedding_np = np.array(embedding)
+            
+            # Mettre en cache (limiter la taille du cache)
+            if len(self.embedding_cache) < 1000:
+                self.embedding_cache[text] = embedding_np
+            
+            return embedding_np
+            
+        except Exception as e:
+            self.logger.error(f"❌ Erreur lors de la génération d'embedding BERT: {e}")
+            return None
+            
+        except Exception as e:
+            self.logger.error(f"❌ Erreur lors de la génération d'embedding BERT: {e}")
+            return None
+    
+    def _cosine_similarity(self, vec1: np.ndarray, vec2: np.ndarray) -> float:
+        """Calcule la similarité cosine entre deux vecteurs."""
+        try:
+            # Normaliser les vecteurs
+            vec1_norm = vec1 / np.linalg.norm(vec1)
+            vec2_norm = vec2 / np.linalg.norm(vec2)
+            
+            # Calculer le produit scalaire (similarité cosine)
+            similarity = np.dot(vec1_norm, vec2_norm)
+            return float(similarity)
+            
+        except Exception as e:
+            self.logger.error(f"❌ Erreur lors du calcul de similarité: {e}")
+            return 0.0
+    
+    def _get_intention_training_patterns(self) -> Dict[str, List[str]]:
+        """Retourne les patterns d'entraînement pour chaque intention."""
+        return {
+            "help_request": [
+                "aide-moi s'il te plaît",
+                "j'ai besoin d'aide",
+                "comment faire",
+                "peux-tu m'aider",
+                "je ne sais pas comment"
+            ],
+            "analysis_request": [
+                "analyse ce code",
+                "examine ce fichier",
+                "vérifie cette fonction",
+                "regarde ça",
+                "peux-tu analyser"
+            ],
+            "optimization_request": [
+                "optimise ce code",
+                "améliore la performance",
+                "rends ça plus efficace",
+                "comment optimiser",
+                "suggestions d'amélioration"
+            ],
+            "explanation_request": [
+                "explique-moi comment ça marche",
+                "que fait cette fonction",
+                "comment ça fonctionne",
+                "peux-tu expliquer",
+                "décris-moi"
+            ],
+            "status_check": [
+                "quel est le statut",
+                "comment ça va",
+                "état du système",
+                "tout va bien",
+                "vérification du statut"
+            ],
+            "termination_request": [
+                "merci pour ton aide tu peux t'arrêter",
+                "c'est bon merci",
+                "tu peux arrêter maintenant",
+                "merci beaucoup c'est parfait",
+                "arrête-toi maintenant"
+            ],
+            "time_inquiry": [
+                "quelle heure est-il",
+                "donne-moi l'heure",
+                "il est quelle heure",
+                "l'heure actuelle",
+                "temps maintenant"
+            ],
+            "general_query": [
+                "dis-moi quelque chose",
+                "raconte-moi",
+                "information sur",
+                "parle-moi de",
+                "qu'est-ce que tu penses"
+            ]
+        }
+    
+    def _cosine_similarity(self, embedding1: np.ndarray, embedding2: np.ndarray) -> float:
+        """Calcule la similarité cosine entre deux embeddings."""
+        try:
+            # Normaliser les vecteurs
+            norm1 = np.linalg.norm(embedding1)
+            norm2 = np.linalg.norm(embedding2)
+            
+            if norm1 == 0 or norm2 == 0:
+                return 0.0
+            
+            # Calculer la similarité cosine
+            similarity = np.dot(embedding1, embedding2) / (norm1 * norm2)
+            return float(similarity)
+            
+        except Exception as e:
+            self.logger.error(f"❌ Erreur lors du calcul de similarité: {e}")
+            return 0.0
+    
+    def _get_intention_training_patterns(self) -> Dict[str, List[str]]:
+        """Retourne les patterns d'entraînement pour chaque intention."""
+        return {
+            "help_request": [
+                "aide-moi", "j'ai besoin d'aide", "comment faire", "peux-tu m'aider",
+                "je ne sais pas", "aide", "help", "assistance", "support"
+            ],
+            "status_check": [
+                "comment ça va", "état du système", "tout va bien", "statut",
+                "ça marche", "fonctionne", "status", "état", "santé du système"
+            ],
+            "analysis_request": [
+                "analyse ça", "regarde ça", "vérifie", "examine", "contrôle",
+                "peux-tu analyser", "étudie", "inspecte", "évalue"
+            ],
+            "optimization_request": [
+                "optimise", "améliore", "rends plus rapide", "accélère",
+                "perfectionne", "optimise les performances", "rends meilleur"
+            ],
+            "explanation_request": [
+                "explique-moi", "qu'est-ce que", "comment ça marche", "dis-moi",
+                "peux-tu expliquer", "clarification", "describe", "tell me"
+            ],
+            "time_inquiry": [
+                "quelle heure", "il est quelle heure", "l'heure", "temps",
+                "what time", "heure actuelle", "heure qu'il est"
+            ],
+            "date_inquiry": [
+                "quelle date", "quel jour", "date d'aujourd'hui", "what date",
+                "calendrier", "date actuelle", "jour"
+            ],
+            "general_query": [
+                "je voudrais", "peux-tu", "est-ce que tu peux", "j'aimerais",
+                "comment", "pourquoi", "quand", "où", "que", "qui"
+            ]
+        }
+    
+    def _bert_extract_parameters(self, normalized_input: str, intent: str, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Extrait les paramètres avec l'aide de BERT."""
+        parameters = {
+            "full_text": normalized_input,
+            "context": context,
+            "extracted_entities": [],
+            "intent_details": {}
+        }
+        
+        try:
+            # Extraction basique des entités nommées
+            words = normalized_input.split()
+            
+            # Détecter les éléments spécifiques selon l'intention
+            if intent in ["analysis_request", "optimization_request"]:
+                # Chercher des mots-clés techniques
+                tech_keywords = ["fichier", "code", "fonction", "variable", "classe", "méthode"]
+                found_tech = [word for word in words if any(keyword in word.lower() for keyword in tech_keywords)]
+                if found_tech:
+                    parameters["target_elements"] = found_tech
+            
+            elif intent in ["explanation_request"]:
+                # Chercher ce qui doit être expliqué
+                explain_indicators = ["qu'est-ce", "comment", "pourquoi"]
+                for indicator in explain_indicators:
+                    if indicator in normalized_input:
+                        remaining = normalized_input.split(indicator, 1)
+                        if len(remaining) > 1:
+                            parameters["explanation_target"] = remaining[1].strip()
+                            break
+            
+            # Extraire les arguments généraux
+            if len(words) > 1:
+                parameters["args"] = words
+            
+            return parameters
+            
+        except Exception as e:
+            self.logger.error(f"❌ Erreur lors de l'extraction de paramètres BERT: {e}")
+            return parameters
+    
+    def _update_bert_learning(self, normalized_input: str, intent: str, confidence: float):
+        """Met à jour l'apprentissage adaptatif de BERT."""
+        try:
+            # Enregistrer les patterns réussis pour améliorer la reconnaissance
+            if confidence > 0.8:  # Haute confiance
+                if intent not in self.frequent_patterns:
+                    self.frequent_patterns[intent] = []
+                
+                self.frequent_patterns[intent].append({
+                    "text": normalized_input,
+                    "confidence": confidence,
+                    "timestamp": time.time()
+                })
+                
+                # Limiter la taille des patterns fréquents
+                if len(self.frequent_patterns[intent]) > 20:
+                    # Garder les 20 patterns avec la meilleure confiance
+                    self.frequent_patterns[intent] = sorted(
+                        self.frequent_patterns[intent], 
+                        key=lambda x: x["confidence"], 
+                        reverse=True
+                    )[:20]
+            
+        except Exception as e:
+            self.logger.warning(f"⚠️ Erreur lors de la mise à jour de l'apprentissage: {e}")
     
     def _extract_parameters(self, normalized_input: str, trigger: str, context: Dict[str, Any]) -> Dict[str, Any]:
         """Extraction intelligente des paramètres d'une commande."""
@@ -352,23 +944,85 @@ class IntelligentSUISpeechAdapter(InterfaceAdapter):
         return None
     
     def _analyze_semantic_intent(self, normalized_input: str) -> Optional[Tuple[CommandType, Dict[str, Any]]]:
-        """Analyse sémantique pour détecter l'intention."""
+        """Analyse sémantique pour détecter l'intention - VERSION SÉLECTIVE."""
         
-        # Mots-clés pour différents types d'intentions
-        intent_patterns = {
-            CommandType.HELP: ["aide", "help", "comment", "how", "pourquoi", "why"],
-            CommandType.STATUS: ["état", "status", "va", "marche", "fonctionne", "work"],
-            CommandType.ANALYZE: ["regarde", "examine", "vérifie", "check", "analyse", "analyze"],
-            CommandType.EXPLAIN: ["explique", "explain", "dis-moi", "tell me", "qu'est-ce", "what"],
-            CommandType.SUGGEST: ["optimise", "optimize", "améliore", "improve", "accélère", "faster", "répare", "fix", "corrige", "correct", "résout", "solve"]
+        # Version plus stricte pour éviter les faux positifs
+        # Ne détecter que des intentions très claires et courtes
+        
+        # Ignorer les requêtes trop longues (probablement pour l'agent IA central)
+        if len(normalized_input.split()) > 5:
+            return None
+        
+        # Mots-clés EXACTS pour des intentions simples uniquement
+        exact_patterns = {
+            CommandType.HELP: ["aide moi", "help me", "comment faire", "how to"],
+            CommandType.STATUS: ["ça va", "ça marche", "état système", "system status"],
+            CommandType.ANALYZE: ["regarde ça", "examine ça", "vérifie ça"],
+            CommandType.EXPLAIN: ["explique ça", "dis moi", "qu'est-ce"],
         }
         
-        for command_type, keywords in intent_patterns.items():
-            if any(keyword in normalized_input for keyword in keywords):
-                return command_type, {"intent": "semantic_match", "full_text": normalized_input}
+        # Correspondance exacte seulement pour éviter les conflits
+        for command_type, patterns in exact_patterns.items():
+            for pattern in patterns:
+                if pattern in normalized_input and len(normalized_input) <= len(pattern) + 3:
+                    return command_type, {"intent": "semantic_match", "full_text": normalized_input}
         
+        # Retourner None pour laisser passer vers l'agent IA central
         return None
     
+    def _detect_polite_quit_intent(self, normalized_input: str) -> bool:
+        """Détecte les intentions d'arrêt polies dans le texte."""
+        # Patterns spécifiques pour les intentions d'arrêt polies
+        quit_patterns = [
+            # Phrases de remerciement + arrêt
+            r"merci.*(?:arrêt|stop|quitt|fini|terminé|ça suffit)",
+            r"merci.*tu peux.*(?:arrêt|stop|quitt)",
+            r"merci pour.*(?:aide|assistance).*(?:arrêt|stop|quitt|tu peux t'arrêter)",
+            r"merci.*(?:de ton aide|pour ton aide|pour tout|beaucoup)",
+            
+            # Formules de politesse + arrêt
+            r"(?:c'est bon|c'est parfait|ça suffit).*(?:arrêt|stop|quitt|merci)",
+            r"(?:c'est bon|c'est parfait|parfait).*merci",
+            r"(?:au revoir|à bientôt|bye|goodbye).*(?:arrêt|stop|quitt|merci)",
+            r"(?:bonne journée|bonne soirée).*(?:arrêt|stop|quitt|merci)",
+            
+            # Intentions directes mais polies
+            r"tu peux.*(?:arrêt|stop|quitt|partir|t'en aller|te reposer)",
+            r"(?:arrête|stop).*(?:maintenant|stp|s'il te plaît|merci)",
+            r"j'ai fini.*(?:merci|au revoir)",
+            r"c'est tout.*(?:merci|au revoir)",
+            
+            # Demandes polies d'arrêt
+            r"(?:peux-tu|pourrais-tu).*(?:arrêt|stop|quitt|t'arrêter)",
+            r"(?:tu peux|vous pouvez).*(?:arrêt|stop|quitt|partir)",
+            
+            # Patterns supplémentaires pour les cas manqués
+            r"(?:parfait|excellent|super|génial|formidable).*merci.*(?:aide|assistance|travail)",
+            r"merci.*(?:c'est exactement|exactement ce qu'il|ce qu'il me fallait)",
+            r"(?:très bien|excellent travail).*(?:arrête|stop|tu peux)",
+            r"(?:formidable|génial).*tu peux.*reposer",
+            r"bon.*merci pour tout",
+        ]
+        
+        import re
+        for pattern in quit_patterns:
+            if re.search(pattern, normalized_input, re.IGNORECASE):
+                return True
+        
+        # Vérifier aussi les mots-clés de politesse + contexte d'arrêt
+        polite_words = ["merci", "c'est bon", "c'est parfait", "parfait", "ça suffit", "au revoir", "bye", "goodbye", 
+                       "super", "génial", "formidable", "excellent", "très bien"]
+        quit_words = ["arrêt", "stop", "quitt", "fini", "terminé", "partir", "t'arrêter", "te reposer", "pour tout"]
+        
+        has_polite = any(word in normalized_input for word in polite_words)
+        has_quit = any(word in normalized_input for word in quit_words)
+        
+        # Pattern spécial : "merci" + indication de satisfaction
+        satisfaction_words = ["exactement", "ce qu'il me fallait", "parfait", "excellent", "super", "génial"]
+        has_satisfaction = any(word in normalized_input for word in satisfaction_words)
+        
+        return (has_polite and has_quit) or ("merci" in normalized_input and has_satisfaction)
+
     def _adapt_message_for_intelligent_speech(self, message: str, response_style: str) -> str:
         """Adaptation intelligente du message selon le style de réponse."""
         
