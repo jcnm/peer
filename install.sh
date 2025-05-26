@@ -910,13 +910,13 @@ install_speech_recognition() {
         python_minor_version=$(python -c "import sys; print(sys.version_info.minor)")
         
         if [[ "$python_minor_version" -eq 10 ]]; then
-            torch_version="2.0.1"
+            torch_version="2.2.2"
         elif [[ "$python_minor_version" -eq 9 ]]; then
-            torch_version="2.0.1"
+            torch_version="2.2.2"
         elif [[ "$python_minor_version" -eq 8 ]]; then
             torch_version="1.13.1"
         else
-            torch_version="2.0.1"  # Fallback
+            torch_version="2.2.2"  # Fallback
         fi
         
         print_message "info" "Using PyTorch version $torch_version for Python 3.$python_minor_version"
@@ -1016,7 +1016,8 @@ install_speech_recognition() {
             # Now install PyTorch and Whisper
             if pip install "torch==$torch_version" && pip install openai-whisper; then
                 # Verify importability
-                if python_module_exists whisper && python_module_exists torch; then
+                
+                if pip install git+https://github.com/openai/whisper.git && python_module_exists whisper && python_module_exists torch; then
                     whisper_installed=true
                     print_message "success" "Pip Whisper installation successful"
                 else
