@@ -455,14 +455,14 @@ check_whisper() {
             echo ""
             info "Ou installez Whisper directement dans l'environnement virtuel:"
             echo ""
-            echo "pip install openai-whisper torch==2.0.1"
+            echo "pip install openai-whisper torch==2.2.2"
             echo ""
         else
             info "Solution: Installez Whisper avec l'une des commandes suivantes:"
             echo ""
-            echo "pip install openai-whisper torch==2.0.1"
+            echo "pip install openai-whisper torch==2.2.2"
             echo "# ou"
-            echo "pip install git+https://github.com/openai/whisper.git torch==2.0.1"
+            echo "pip install git+https://github.com/openai/whisper.git torch==2.2.2"
             echo ""
         fi
     fi
@@ -552,7 +552,7 @@ check_wav2vec2() {
     else
         info "Solution: Installez les dépendances de Wav2Vec2 avec:"
         echo ""
-        echo "pip install transformers torch==2.0.1 torchaudio soundfile"
+        echo "pip install transformers torch==2.2.2 torchaudio soundfile"
         echo ""
     fi
 }
