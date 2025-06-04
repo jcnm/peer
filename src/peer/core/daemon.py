@@ -46,6 +46,10 @@ class PeerDaemon(CoreAPI):
         self.version = "0.3.0"  # Version du daemon
         self.logger = logging.getLogger(f"PeerDaemon-{instance_id}")
         
+        # Shutdown management
+        self._should_shutdown = False
+        self.shutdown_event = threading.Event()
+        
         # Initialize core services
         self._init_services()
         
@@ -66,6 +70,14 @@ class PeerDaemon(CoreAPI):
     def get_version(self) -> str:
         """Get daemon version"""
         return self.version
+    
+    def get_shutdown_event(self) -> threading.Event:
+        """Get the shutdown event for external monitoring"""
+        return self.shutdown_event
+    
+    def should_shutdown(self) -> bool:
+        """Check if daemon should shutdown"""
+        return self._should_shutdown
     
     def _init_services(self):
         """Initialize all core services"""
@@ -543,11 +555,17 @@ class PeerDaemon(CoreAPI):
     
     def _handle_quit(self, request: CoreRequest) -> CoreResponse:
         """Handle quit command"""
+        self.logger.info("Quit command received - initiating shutdown")
+        
+        # Set shutdown flags
+        self._should_shutdown = True
+        self.shutdown_event.set()
+        
         return CoreResponse(
-            type=ResponseType.SUCCESS,
-            status="quit_requested",
+            type=ResponseType.QUIT,
+            status="shutdown_initiated",
             message="Interface arrêtée à la demande de l'utilisateur. À bientôt !",
-            data={'quit': True, 'farewell': True},
+            data={'quit': True, 'farewell': True, 'shutdown': True},
             request_id=request.request_id,
             session_id=request.session_id,
             instance_id=self.instance_id
@@ -844,6 +862,10 @@ def shutdown_daemon():
     
     with _daemon_lock:
         if _daemon_instance:
+            # Set shutdown flags
+            _daemon_instance._should_shutdown = True
+            _daemon_instance.shutdown_event.set()
+            
             # End all sessions
             for session_id in list(_daemon_instance.sessions.keys()):
                 _daemon_instance.end_session(session_id)

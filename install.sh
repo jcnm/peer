@@ -738,6 +738,110 @@ EOF
     return 0
 }
 
+# Install Piper TTS from source
+install_piper_tts() {
+    print_message "info" "Installing Piper TTS from source..."
+    
+    # Check if Piper is already installed and working
+    if [[ -x "$SCRIPT_DIR/piper/install/piper" ]] && [[ "$FORCE_INSTALL" != true ]]; then
+        print_message "success" "Piper TTS is already installed"
+        # Create symlinks in virtual environment
+        ln -sf "$SCRIPT_DIR/piper/install/piper" "$VIRTUAL_ENV/bin/piper" 2>/dev/null || true
+        ln -sf "$SCRIPT_DIR/piper/install/piper_phonemize" "$VIRTUAL_ENV/bin/piper_phonemize" 2>/dev/null || true
+        ln -sf "$SCRIPT_DIR/piper/install/espeak-ng" "$VIRTUAL_ENV/bin/espeak-ng" 2>/dev/null || true
+        return 0
+    fi
+    
+    # Install system dependencies
+    print_message "info" "Installing system dependencies for Piper..."
+    if [[ "$OS" == "linux" ]]; then
+        if command_exists apt-get; then
+            sudo apt-get update && sudo apt-get install -y \
+                build-essential cmake git \
+                libespeak-ng-dev espeak-ng-data espeak-ng \
+                pkg-config || print_message "warning" "Failed to install some system dependencies"
+        elif command_exists dnf; then
+            sudo dnf install -y \
+                gcc gcc-c++ cmake git make \
+                espeak-ng-devel espeak-ng \
+                pkgconfig || print_message "warning" "Failed to install some system dependencies"
+        elif command_exists pacman; then
+            sudo pacman -S --noconfirm \
+                base-devel cmake git \
+                espeak-ng pkgconf || print_message "warning" "Failed to install some system dependencies"
+        fi
+    elif [[ "$OS" == "macos" ]]; then
+        if command_exists brew; then
+            brew install cmake git espeak-ng pkg-config || print_message "warning" "Failed to install some system dependencies"
+        else
+            print_message "warning" "Homebrew not found. Please install cmake, git, espeak-ng, and pkg-config manually"
+        fi
+    fi
+    
+    # Clone Piper repository if it doesn't exist
+    if [[ ! -d "$SCRIPT_DIR/piper" ]]; then
+        print_message "info" "Cloning Piper repository..."
+        if ! git clone --depth 1 https://github.com/rhasspy/piper.git "$SCRIPT_DIR/piper"; then
+            print_message "error" "Failed to clone Piper repository"
+            return 1
+        fi
+    fi
+    
+    # Build Piper
+    print_message "info" "Building Piper TTS (this may take several minutes)..."
+    cd "$SCRIPT_DIR/piper"
+    
+    # Create build directory
+    mkdir -p build
+    cd build
+    
+    # Configure build
+    if ! cmake -DCMAKE_BUILD_TYPE=Release ..; then
+        print_message "error" "Failed to configure Piper build"
+        cd "$SCRIPT_DIR"
+        return 1
+    fi
+    
+    # Build
+    if ! make -j$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2); then
+        print_message "error" "Failed to build Piper"
+        cd "$SCRIPT_DIR"
+        return 1
+    fi
+    
+    # Install
+    if ! make install; then
+        print_message "error" "Failed to install Piper"
+        cd "$SCRIPT_DIR"
+        return 1
+    fi
+    
+    cd "$SCRIPT_DIR"
+    
+    # Verify installation
+    if [[ -x "$SCRIPT_DIR/piper/install/piper" ]]; then
+        print_message "success" "Piper TTS built and installed successfully"
+        
+        # Create symlinks in virtual environment for easy access
+        ln -sf "$SCRIPT_DIR/piper/install/piper" "$VIRTUAL_ENV/bin/piper" 2>/dev/null || true
+        ln -sf "$SCRIPT_DIR/piper/install/piper_phonemize" "$VIRTUAL_ENV/bin/piper_phonemize" 2>/dev/null || true
+        ln -sf "$SCRIPT_DIR/piper/install/espeak-ng" "$VIRTUAL_ENV/bin/espeak-ng" 2>/dev/null || true
+        
+        # Copy required libraries if they exist
+        if [[ -f "$SCRIPT_DIR/piper/install/libonnxruntime.so" ]]; then
+            cp "$SCRIPT_DIR/piper/install/libonnxruntime.so"* "$VIRTUAL_ENV/lib/" 2>/dev/null || true
+        fi
+        if [[ -f "$SCRIPT_DIR/piper/install/libonnxruntime.dylib" ]]; then
+            cp "$SCRIPT_DIR/piper/install/libonnxruntime"*.dylib "$VIRTUAL_ENV/lib/" 2>/dev/null || true
+        fi
+        
+        return 0
+    else
+        print_message "error" "Piper installation verification failed"
+        return 1
+    fi
+}
+
 # Install Python dependencies
 install_python_dependencies() {
     print_message "info" "Installing Python dependencies..."
@@ -819,6 +923,29 @@ install_python_dependencies() {
         print_message "warning" "Failed to install package in development mode. Continuing anyway..."
     fi
     
+    # Install PyYAML for configuration loading
+    print_message "info" "Installing PyYAML for configuration files..."
+    if ! pip install PyYAML; then
+        print_message "warning" "Failed to install PyYAML. Continuing anyway..."
+    fi
+
+    # Install spaCy and French language model
+    print_message "info" "Installing spaCy for NLP processing..."
+    if ! pip install spacy; then
+        print_message "warning" "Failed to install spaCy. Continuing anyway..."
+    else
+        print_message "info" "Installing French language model for spaCy..."
+        if ! python -m spacy download fr_core_news_sm; then
+            print_message "warning" "Failed to install French spaCy model. Continuing anyway..."
+        fi
+    fi
+
+    # Install sentence-transformers for NLP
+    print_message "info" "Installing sentence-transformers..."
+    if ! pip install sentence-transformers; then
+        print_message "warning" "Failed to install sentence-transformers. Continuing anyway..."
+    fi
+
     # Install web server dependencies
     print_message "info" "Installing web server dependencies..."
     if ! pip install fastapi uvicorn; then
@@ -837,23 +964,29 @@ install_python_dependencies() {
         print_message "warning" "Failed to install pyttsx3. Continuing anyway..."
     fi
     
+    # Install Piper TTS from source
+    install_piper_tts
+    
     # Install audio dependencies based on OS
     print_message "info" "Installing audio dependencies..."
     if [[ "$OS" == "linux" ]]; then
         if command_exists apt-get; then
-            sudo apt-get update && sudo apt-get install -y python3-pyaudio portaudio19-dev espeak || 
+            sudo apt-get update && sudo apt-get install -y python3-pyaudio portaudio19-dev espeak espeak-ng espeak-ng-data || 
                 print_message "warning" "Failed to install system audio dependencies. Continuing anyway..."
         elif command_exists dnf; then
-            sudo dnf install -y python3-pyaudio portaudio-devel espeak || 
+            sudo dnf install -y python3-pyaudio portaudio-devel espeak espeak-ng || 
                 print_message "warning" "Failed to install system audio dependencies. Continuing anyway..."
         elif command_exists pacman; then
-            sudo pacman -S --noconfirm python-pyaudio portaudio espeak || 
+            sudo pacman -S --noconfirm python-pyaudio portaudio espeak espeak-ng || 
                 print_message "warning" "Failed to install system audio dependencies. Continuing anyway..."
         fi
     elif [[ "$OS" == "macos" ]]; then
         if command_exists brew; then
             brew install portaudio || 
                 print_message "warning" "Failed to install portaudio. Continuing anyway..."
+            # Install espeak-ng for Piper TTS
+            brew install espeak-ng || 
+                print_message "warning" "Failed to install espeak-ng. Continuing anyway..."
         fi
     fi
     
@@ -867,7 +1000,82 @@ install_python_dependencies() {
     if ! pip install psutil; then
         print_message "warning" "Failed to install psutil. Continuing anyway..."
     fi
+
+    # Install PyTorch ecosystem first (foundation for most STT/TTS libraries)
+    print_message "info" "Installing PyTorch ecosystem..."
+    local torch_version="2.7.0"
     
+    # Install PyTorch, torchaudio, and related dependencies
+    if ! pip install torch==$torch_version torchaudio torchvision; then
+        print_message "warning" "Failed to install full PyTorch ecosystem. Trying individual packages..."
+        # Try installing individually if bundle fails
+        pip install torch==$torch_version || print_message "warning" "Failed to install PyTorch"
+        pip install torchaudio || print_message "warning" "Failed to install torchaudio"
+        pip install torchvision || print_message "warning" "Failed to install torchvision"
+    fi
+
+    # Install core audio/ML dependencies that most STT/TTS engines need
+    print_message "info" "Installing core audio and ML dependencies..."
+    pip install librosa || print_message "warning" "Failed to install librosa"
+    pip install scipy || print_message "warning" "Failed to install scipy"
+    pip install scikit-learn || print_message "warning" "Failed to install scikit-learn"
+    pip install transformers || print_message "warning" "Failed to install transformers"
+    pip install accelerate || print_message "warning" "Failed to install accelerate"
+    pip install datasets || print_message "warning" "Failed to install datasets"
+
+    # Install core STT/TTS library dependencies
+    print_message "info" "Installing core STT/TTS library dependencies..."
+    
+    # For SoundFile (general audio utility, install early as many depend on it)
+    print_message "info" "Installing SoundFile..."
+    if ! pip install SoundFile; then
+        print_message "warning" "Failed to install SoundFile. Continuing anyway..."
+    fi
+    
+    # For WhisperX (replaces openai-whisper)
+    print_message "info" "Installing WhisperX (this might take a while as it builds things)..."
+    if ! pip install git+https://github.com/m-bain/whisperX.git; then
+        print_message "warning" "Failed to install whisperx. Continuing anyway..."
+    fi
+    
+    # For Coqui XTTS_v2
+    print_message "info" "Installing Coqui TTS..."
+    if ! pip install TTS>=0.22.0; then
+        print_message "warning" "Failed to install TTS (for Coqui XTTS). Continuing anyway..."
+    fi
+    
+    # For Silero
+    print_message "info" "Installing Silero TTS..."
+    if ! pip install silero>=1.0.0; then
+        print_message "warning" "Failed to install silero. Continuing anyway..."
+    fi
+    
+    # For SpeechBrain
+    print_message "info" "Installing SpeechBrain..."
+    if ! pip install speechbrain>=0.5.14; then
+        print_message "warning" "Failed to install speechbrain. Continuing anyway..."
+    fi
+    
+    # For Vosk (Python bindings)
+    print_message "info" "Installing Vosk STT..."
+    if ! pip install vosk>=0.3.45; then
+        print_message "warning" "Failed to install vosk. Continuing anyway..."
+    fi
+    
+    # For Bark TTS
+    print_message "info" "Installing Bark TTS..."
+    if ! pip install bark>=0.2.0; then
+        print_message "warning" "Failed to install bark. Continuing anyway..."
+    fi
+    
+    # Additional audio processing libraries
+    print_message "info" "Installing additional audio processing libraries..."
+    pip install ffmpeg-python || print_message "warning" "Failed to install ffmpeg-python"
+    pip install pydub || print_message "warning" "Failed to install pydub"
+    pip install resampy || print_message "warning" "Failed to install resampy"
+    
+    # Note: Kokoro TTS is assumed to be manually installed if needed, as it's not a standard pip package.
+
     print_message "success" "Python dependencies installed successfully"
     return 0
 }
@@ -891,9 +1099,9 @@ install_speech_recognition() {
     local wav2vec2_installed=false
     
     # Check if engines are already installed
-    if python_module_exists whisper && [[ "$FORCE_INSTALL" != true ]]; then
+    if python_module_exists whisperx && [[ "$FORCE_INSTALL" != true ]]; then
         whisper_installed=true
-        print_message "success" "Whisper is already installed"
+        print_message "success" "WhisperX is already installed"
     elif python_module_exists vosk && [[ "$FORCE_INSTALL" != true ]]; then
         vosk_installed=true
         print_message "success" "Vosk is already installed"
@@ -910,168 +1118,55 @@ install_speech_recognition() {
         python_minor_version=$(python -c "import sys; print(sys.version_info.minor)")
         
         if [[ "$python_minor_version" -eq 10 ]]; then
-            torch_version="2.2.2"
+            torch_version="2.7.0"
         elif [[ "$python_minor_version" -eq 9 ]]; then
-            torch_version="2.2.2"
+            torch_version="2.7.0"
         elif [[ "$python_minor_version" -eq 8 ]]; then
-            torch_version="1.13.1"
+            torch_version="2.7.0"
         else
-            torch_version="2.2.2"  # Fallback
+            torch_version="2.7.0"  # Fallback
         fi
         
         print_message "info" "Using PyTorch version $torch_version for Python 3.$python_minor_version"
         
-        # 1. Try to install Whisper (OpenAI)
-        print_message "info" "Attempting to install Whisper (OpenAI)..."
+        # 1. Try to install WhisperX (replaces Whisper)
+        print_message "info" "Attempting to install WhisperX (m-bain/whisperX)..."
         
-        # Check for Homebrew installation on macOS
-        if [[ "$OS" == "macos" ]] && command_exists brew && brew list | grep -q openai-whisper; then
-            print_message "info" "Whisper is already installed via Homebrew"
-            
-            # Configure PYTHONPATH to include Homebrew modules
-            local homebrew_prefix
-            homebrew_prefix=$(brew --prefix)
-            local homebrew_site_packages="$homebrew_prefix/lib/python$PYTHON_VERSION/site-packages"
-            
-            # Create a .pth file in the virtual environment site-packages
-            local venv_site_packages
-            venv_site_packages=$(python -c "import site; print(site.getsitepackages()[0])")
-            echo "$homebrew_site_packages" > "$venv_site_packages/homebrew-whisper.pth"
-            
-            # Verify importability
-            if python_module_exists whisper; then
-                whisper_installed=true
-                print_message "success" "Homebrew Whisper configuration successful"
+        # WhisperX installation is primarily via pip git+https, ensure PyTorch is compatible.
+        # The main pip install for whisperx is already handled in install_python_dependencies.
+        # This section will now primarily focus on verifying its installation and PyTorch.
+
+        # Ensure PyTorch is installed (WhisperX depends on it)
+        if ! python_module_exists torch; then
+            print_message "info" "PyTorch not found, installing PyTorch $torch_version for WhisperX..."
+            if ! pip install "torch==$torch_version"; then # Ensure torchaudio and torchvision are compatible or install them too if needed by whisperx
+                print_message "error" "Failed to install PyTorch for WhisperX. WhisperX might not work."
             else
-                print_message "warning" "Homebrew Whisper configuration failed, trying pip installation..."
-                
-                # Add Homebrew Python bin to PATH as a fallback
-                export PATH="$homebrew_prefix/opt/python@$PYTHON_VERSION/bin:$PATH"
-                
-                # Try again after PATH update
-                if python_module_exists whisper; then
-                    whisper_installed=true
-                    print_message "success" "Homebrew Whisper configuration successful after PATH update"
-                else
-                    print_message "warning" "Homebrew Whisper still not importable after PATH update"
-                fi
+                print_message "success" "PyTorch $torch_version installed for WhisperX."
             fi
-        elif [[ "$OS" == "macos" ]] && command_exists brew; then
-            # Try to install Whisper via Homebrew
-            print_message "info" "Attempting to install Whisper via Homebrew..."
-            if brew install openai-whisper; then
-                # Configure PYTHONPATH for Homebrew modules
-                local homebrew_prefix
-                homebrew_prefix=$(brew --prefix)
-                local homebrew_site_packages="$homebrew_prefix/lib/python$PYTHON_VERSION/site-packages"
-                
-                # Create a .pth file in the virtual environment site-packages
-                local venv_site_packages
-                venv_site_packages=$(python -c "import site; print(site.getsitepackages()[0])")
-                echo "$homebrew_site_packages" > "$venv_site_packages/homebrew-whisper.pth"
-                
-                # Add symlinks to ensure Python can find the modules
-                mkdir -p "$venv_site_packages/whisper"
-                ln -sf "$homebrew_site_packages/whisper"/* "$venv_site_packages/whisper/" 2>/dev/null || true
-                
-                # Verify importability
-                if python_module_exists whisper; then
-                    whisper_installed=true
-                    print_message "success" "Homebrew Whisper installation and configuration successful"
-                else
-                    print_message "warning" "Homebrew Whisper configuration failed, trying pip installation..."
-                    
-                    # Add Homebrew Python bin to PATH as a fallback
-                    export PATH="$homebrew_prefix/opt/python@$PYTHON_VERSION/bin:$PATH"
-                    
-                    # Try again after PATH update
-                    if python_module_exists whisper; then
-                        whisper_installed=true
-                        print_message "success" "Homebrew Whisper configuration successful after PATH update"
-                    else
-                        print_message "warning" "Homebrew Whisper still not importable after PATH update"
-                    fi
-                fi
-            else
-                print_message "warning" "Homebrew Whisper installation failed, trying pip installation..."
-            fi
+        else
+            print_message "success" "PyTorch already installed, checking version for WhisperX..."
+            # Optionally, add a version check for PyTorch if WhisperX has strict requirements not handled by its setup.py
+        fi
+
+        if python_module_exists whisperx; then
+            whisper_installed=true # Using 'whisper_installed' variable name for consistency, though it's WhisperX
+            print_message "success" "WhisperX installation verified."
+        else
+            print_message "warning" "WhisperX module not importable after installation attempt. It might have failed."
+            print_message "info" "Please check the output from 'pip install git+https://github.com/m-bain/whisperX.git' during dependency installation."
         fi
         
-        # Try pip installation if Homebrew installation failed or not on macOS
-        if [[ "$whisper_installed" == false ]]; then
-            print_message "info" "Attempting to install Whisper via pip..."
-            
-            # First ensure NumPy 1.x is installed and importable
-            if ! python_module_exists numpy; then
-                print_message "warning" "NumPy not found, installing NumPy 1.x first..."
-                pip install "numpy<2.0" --force-reinstall
-            else
-                numpy_version=$(python -c "import numpy; print(numpy.__version__)" 2>/dev/null)
-                if [[ $numpy_version != 1.* ]]; then
-                    print_message "warning" "NumPy version $numpy_version detected. Reinstalling NumPy 1.x..."
-                    pip install "numpy<2.0" --force-reinstall
-                fi
-            fi
-            
-            # Now install PyTorch and Whisper
-            if pip install "torch==$torch_version" && pip install openai-whisper; then
-                # Verify importability
-                
-                if pip install git+https://github.com/openai/whisper.git && python_module_exists whisper && python_module_exists torch; then
-                    whisper_installed=true
-                    print_message "success" "Pip Whisper installation successful"
-                else
-                    print_message "warning" "Pip Whisper installation failed (modules not importable), trying git installation..."
-                fi
-            else
-                print_message "warning" "Pip Whisper installation failed, trying git installation..."
-            fi
-        fi
-        
-        # Try git installation if pip installation failed
-        if [[ "$whisper_installed" == false ]]; then
-            print_message "info" "Attempting to install Whisper via git..."
-            
-            # First ensure NumPy 1.x and PyTorch are installed
-            pip install "numpy<2.0" --force-reinstall
-            pip install "torch==$torch_version"
-            
-            # Now install Whisper from git
-            if pip install git+https://github.com/openai/whisper.git; then
-                # Verify importability
-                if python_module_exists whisper && python_module_exists torch; then
-                    whisper_installed=true
-                    print_message "success" "Git Whisper installation successful"
-                else
-                    print_message "warning" "Git Whisper installation failed (modules not importable)"
-                fi
-            else
-                print_message "warning" "Git Whisper installation failed"
-            fi
-        fi
-        
-        # Download Whisper model if installation was successful and not skipped
+        # Download Whisper model (now for WhisperX, which uses faster-whisper models)
+        # WhisperX/faster-whisper usually downloads models on first use per specified model size.
+        # No explicit download step here unless specific pre-warming is desired.
         if [[ "$whisper_installed" == true ]] && [[ "$SKIP_MODELS_DOWNLOAD" != true ]]; then
-            # Check if model already exists
-            local model_exists=false
-            if [[ -d "$HOME/.cache/whisper" ]]; then
-                if ls "$HOME/.cache/whisper/base"* >/dev/null 2>&1; then
-                    model_exists=true
-                    print_message "success" "Whisper base model already downloaded"
-                fi
-            fi
-            
-            if [[ "$model_exists" == false ]]; then
-                print_message "info" "Downloading Whisper base model (this may take a few minutes)..."
-                if python -c "import whisper; whisper.load_model('base')" 2>/dev/null; then
-                    print_message "success" "Whisper model download successful"
-                else
-                    print_message "warning" "Whisper model download failed, it will be downloaded on first use"
-                fi
-            fi
+            print_message "info" "WhisperX models (via faster-whisper) will be downloaded on first use by the application."
+            # Example of how to pre-download a model if needed by the application, but usually not done in install script:
+            # python -c "from whisperx import load_model; load_model(\'base.en\', device=\'cpu\', compute_type=\'int8\')" >/dev/null 2>&1 || print_message "warning" "Failed to pre-download a WhisperX model."
         fi
         
-        # 2. Try to install Vosk if Whisper installation failed
+        # 2. Try to install Vosk if WhisperX installation failed
         if [[ "$whisper_installed" == false ]]; then
             print_message "info" "Attempting to install Vosk (lightweight offline solution)..."
             if pip install vosk; then
@@ -1113,7 +1208,7 @@ install_speech_recognition() {
             fi
         fi
         
-        # 3. Try to install Wav2Vec2 if both Whisper and Vosk installation failed
+        # 3. Try to install Wav2Vec2 if both WhisperX and Vosk installation failed
         if [[ "$whisper_installed" == false ]] && [[ "$vosk_installed" == false ]]; then
             print_message "info" "Attempting to install Wav2Vec2 (Meta)..."
             
@@ -1155,12 +1250,12 @@ install_speech_recognition() {
     
     # Create status file
     print_message "info" "Creating speech recognition engines status file..."
-    echo "{\"whisper\": $whisper_installed, \"vosk\": $vosk_installed, \"wav2vec2\": $wav2vec2_installed}" > "$VIRTUAL_ENV/stt_engines.json"
+    echo "{\"whisperx\": $whisper_installed, \"vosk\": $vosk_installed, \"wav2vec2\": $wav2vec2_installed}" > "$VIRTUAL_ENV/stt_engines.json"
     
     # Installation summary
     print_message "info" "Speech recognition engines installation summary:"
     if [[ "$whisper_installed" == true ]]; then
-        print_message "success" "✓ Whisper (OpenAI) installed and will be used for speech recognition"
+        print_message "success" "✓ WhisperX installed and will be used for speech recognition"
     elif [[ "$vosk_installed" == true ]]; then
         print_message "success" "✓ Vosk installed and will be used for speech recognition"
     elif [[ "$wav2vec2_installed" == true ]]; then
@@ -1197,28 +1292,28 @@ verify_installation() {
         torch_version=$(python -c "import torch; print(torch.__version__)" 2>/dev/null)
         print_message "success" "PyTorch version $torch_version verified"
     else
-        print_message "warning" "PyTorch is not importable (required for Whisper)"
+        print_message "warning" "PyTorch is not importable (required for WhisperX)"
     fi
     
-    # Check Whisper
-    if python_module_exists whisper; then
-        print_message "success" "Whisper is importable"
+    # Check WhisperX
+    if python_module_exists whisperx; then
+        print_message "success" "WhisperX is importable"
     else
-        print_message "warning" "Whisper is not importable"
+        print_message "warning" "WhisperX is not importable"
     fi
     
     # Check Vosk
     if python_module_exists vosk; then
         print_message "success" "Vosk is importable"
     else
-        print_message "info" "Vosk is not importable (alternative to Whisper)"
+        print_message "info" "Vosk is not importable (alternative to WhisperX)"
     fi
     
     # Check Wav2Vec2
     if python_module_exists transformers && python_module_exists torchaudio && python_module_exists soundfile; then
         print_message "success" "Wav2Vec2 dependencies are importable"
     else
-        print_message "info" "Wav2Vec2 dependencies are not importable (alternative to Whisper)"
+        print_message "info" "Wav2Vec2 dependencies are not importable (alternative to WhisperX)"
     fi
     
     # Check PyAudio
@@ -1233,6 +1328,13 @@ verify_installation() {
         print_message "success" "pyttsx3 is importable"
     else
         print_message "warning" "pyttsx3 is not importable (required for text-to-speech)"
+    fi
+    
+    # Check Piper TTS binary
+    if command_exists piper || [[ -x "$VIRTUAL_ENV/bin/piper" ]] || [[ -x "$SCRIPT_DIR/piper/install/piper" ]]; then
+        print_message "success" "Piper TTS binary is available"
+    else
+        print_message "warning" "Piper TTS binary is not available (advanced text-to-speech)"
     fi
     
     # Check PYTHONPATH
@@ -1303,6 +1405,25 @@ main() {
     
     # Install speech recognition engines
     install_speech_recognition
+
+    # Install models using the new script
+    if [[ "$SKIP_MODELS_DOWNLOAD" == false ]]; then
+        print_message "info" "Running model installation script (install_models.sh)..."
+        local model_script_path="$SCRIPT_DIR/install_models.sh"
+        if [[ -f "$model_script_path" ]]; then
+            if ! bash "$model_script_path"; then
+                print_message "error" "Failed to execute install_models.sh script."
+                # Optionally, decide if this is a fatal error
+                # exit 1 
+            else
+                print_message "success" "install_models.sh executed successfully."
+            fi
+        else
+            print_message "warning" "install_models.sh not found at $model_script_path. Skipping model downloads."
+        fi
+    else
+        print_message "info" "Skipping model downloads as requested by --skip-models-download."
+    fi
     
     # Verify installation
     verify_installation

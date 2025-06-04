@@ -351,8 +351,8 @@ fix_common_issues() {
     
     # Corriger les problèmes de torch avec Python 3.10+
     if python -c "import sys; sys.exit(0 if sys.version_info.minor >= 10 else 1)" 2>/dev/null; then
-        print_message "info" "Installation de torch 2.2.2 pour Python 3.10+..."
-        pip install torch==2.2.2 --force-reinstall
+        print_message "info" "Installation de torch 2.7.0 pour Python 3.10+..."
+        pip install torch==2.7.0 --force-reinstall
     fi
     
     # Créer un fichier .pth pour ajouter le site-packages au PYTHONPATH
@@ -455,14 +455,14 @@ check_whisper() {
             echo ""
             info "Ou installez Whisper directement dans l'environnement virtuel:"
             echo ""
-            echo "pip install openai-whisper torch==2.2.2"
+            echo "pip install openai-whisper torch==2.7.0"
             echo ""
         else
             info "Solution: Installez Whisper avec l'une des commandes suivantes:"
             echo ""
-            echo "pip install openai-whisper torch==2.2.2"
+            echo "pip install openai-whisper torch==2.7.0"
             echo "# ou"
-            echo "pip install git+https://github.com/openai/whisper.git torch==2.2.2"
+            echo "pip install git+https://github.com/openai/whisper.git torch==2.7.0"
             echo ""
         fi
     fi
@@ -552,7 +552,7 @@ check_wav2vec2() {
     else
         info "Solution: Installez les dépendances de Wav2Vec2 avec:"
         echo ""
-        echo "pip install transformers torch==2.2.2 torchaudio soundfile"
+        echo "pip install transformers torch==2.7.0 torchaudio soundfile"
         echo ""
     fi
 }

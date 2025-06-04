@@ -39,12 +39,13 @@ dependencies = [
     "aiohttp>=3.8.0",
     "websockets>=10.0",
     "structlog>=21.1.0",
+    "PyYAML>=6.0",  # For configuration file loading
 
     # LLM et IA
     "ollama>=0.1.0",
     "transformers>=4.20.0",
     "spacy>=3.4.0",
-    "pytorch==2.2.2",
+    # "pytorch==2.7.0", # PyTorch is often a dependency of the ML libraries, let them manage it or install separately if specific version needed.
     
     # Analyse de code
     "tree-sitter>=0.20.0",
@@ -56,8 +57,22 @@ dependencies = [
     "SpeechRecognition>=3.10.0",
     "pyaudio>=0.2.11",
     "webrtcvad>=2.0.10",
-    "numpy<2",
+    "numpy<2", # Keep numpy<2 for broad compatibility
     "scipy>=1.7.0",
+    "soundfile>=0.12.1", # Added for various audio processing tasks, often a dep for TTS/STT libs
+
+    # STT & TTS Libraries - Add new ones here
+    "openai-whisper", # Base Whisper, can be replaced by whisperx if preferred
+    "whisperx @ git+https://github.com/m-bain/whisperX.git", # For WhisperX
+    "TTS>=0.22.0",        # For Coqui XTTS_v2 and other Coqui models
+    "silero>=0.4.0,<0.5.0",  # For Silero STT/TTS (limited to available versions)
+    "speechbrain>=0.5.14", # For SpeechBrain STT/TTS
+    "vosk>=0.3.40,<0.3.45",  # For Vosk STT (limited to available versions)
+    "bark>=0.2.0",        # For Bark TTS (Suno AI)
+    # Kokoro TTS is not a direct pip install, usually involves cloning a repo and local setup.
+    # It's not added here as a direct pip dependency.
+    # If a PyPI package "kokoro-tts" exists and is the correct one, it can be added.
+    # For now, assuming manual install or it's part of another library.
     
     # Utilitaires
     "tqdm>=4.62.0",
@@ -78,12 +93,13 @@ dev = [
 ]
 speech = [
     "pyttsx3>=2.90",
-    "pyaudio>=0.2.11",
-    "SpeechRecognition>=3.10.0",
-    "webrtcvad>=2.0.10",
-    "whisper>=1.0.0",
-    "piper-tts>=1.3.0",
-    "vosk>=0.3.42",
+    "pyaudio>=0.2.11", # Redundant if in base, but ok
+    "SpeechRecognition>=3.10.0", # Redundant if in base, but ok
+    "webrtcvad>=2.0.10", # Redundant if in base, but ok
+    # "whisper>=1.0.0", # Covered by openai-whisper or whisperx
+    # "piper-tts>=1.3.0", # Piper is compiled from source, not a pip package for the core binary
+    # "vosk>=0.3.42", # Covered in base
+    "soundfile>=0.12.1" # Good to have here too
 ]
 ide = [
     "python-language-server>=0.36.2",

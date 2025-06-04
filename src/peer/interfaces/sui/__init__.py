@@ -1,5 +1,11 @@
 """
-Module d'initialisation pour les fichiers __init__.py
+Module d'initialisation de l'interface SUI.
+
+Ce module expose les classes et fonctions principales de l'interface SUI.
 """
 
-# Fichier vide pour marquer le répertoire comme un package Python
+from .main import SpeechUserInterface
+from .domain.models import SUIResponse, InterfaceAction
+from .adapters.interface_adapter import SUIInterfaceAdapter
+
+__all__ = ['SpeechUserInterface', 'SUIResponse', 'InterfaceAction', 'SUIInterfaceAdapter']

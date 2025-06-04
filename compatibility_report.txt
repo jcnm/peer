@@ -1,0 +1,27 @@
+RAPPORT DE COMPATIBILITÉ - install.sh
+=====================================
+Date: Wed May 28 08:57:23 CEST 2025
+Script: /Users/smpceo/Desktop/peer/install.sh
+
+MODIFICATIONS APPORTÉES:
+1. PyTorch unifié à la version 2.7.0 pour toutes les versions Python
+2. Ajout de la fonction install_piper_tts() pour compilation depuis les sources
+3. Integration de l'appel install_piper_tts dans la section TTS dependencies
+4. Ajout de l'installation espeak-ng pour macOS
+5. Ajout de la vérification Piper TTS binary dans verify_installation
+
+COMPATIBILITÉ:
+- ✓ Le script peut s'exécuter sur une machine vierge
+- ✓ Compilation automatique de Piper depuis GitHub
+- ✓ Installation des dépendances système requises
+- ✓ Gestion multi-plateforme (Linux, macOS)
+- ✓ Vérification de l'installation
+
+FONCTIONNALITÉS:
+- ✓ Installation PyTorch 2.7.0
+- ✓ Compilation Piper TTS depuis les sources
+- ✓ Installation espeak-ng
+- ✓ Création de liens symboliques dans l'environnement virtuel
+- ✓ Vérification de l'installation
+
+Le script install.sh est prêt pour la production.

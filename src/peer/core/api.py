@@ -66,12 +66,17 @@ class CommandType(Enum):
 
 class ResponseType(Enum):
     """Standard response types from the core"""
-    SUCCESS = "success"
-    ERROR = "error"
-    INFO = "info"
-    WARNING = "warning"
-    PROGRESS = "progress"
-    DATA = "data"
+    SUCCESS = "success"  # Daemon received request correctly, no further immediate action/info from daemon.
+    ERROR = "error" # Daemon encountered an error processing the request, needs to inform the interface.
+    INFO = "info" # Inform the interface about some information, not an error or warning.
+    WARNING = "warning" # Inform the interface about a warning
+    PROGRESS = "progress" # Inform the interface about progress
+    DATA = "data" # Send data to the interface
+    ASK = "ask"  # Tell the interface to ask more information from the user
+    COMPLET = "complet"  # Inform the interface that a request is completed
+    DETAILS = "details"  # Inform the client about details of daemon work on a request
+    QUIT = "quit"  # Inform the interface to quit because the daemon is shutting down
+    FEEDBACK = "feedback" # Inform the interface to ask for user feedback on a request
 
 
 class InterfaceType(Enum):

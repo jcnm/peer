@@ -10,8 +10,11 @@ fi
 # Activer l'environnement virtuel
 source vepeer/bin/activate
 
+# Ajouter le répertoire src au PYTHONPATH
+export PYTHONPATH=$PYTHONPATH:$(pwd)/src
+
 # Exécuter l'interface SUI
-python -m peer.interfaces.sui.sui
+python -m peer.interfaces.sui.main
 
 # Désactiver l'environnement virtuel à la fin
 deactivate

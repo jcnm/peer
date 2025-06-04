@@ -1,0 +1,36 @@
+# Configuration vocale française optimisée pour SUI
+# Voices Premium françaises disponibles sur macOS
+
+french_voices:
+  premium:
+    - name: "Audrey (Premium)"
+      id: "Audrey (Premium)"
+      language: "fr_FR"
+      quality: "premium"
+      gender: "female"
+      description: "Voix française premium féminine de haute qualité"
+      
+    - name: "Thomas (Enhanced)"
+      id: "Thomas (Enhanced)"
+      language: "fr_FR" 
+      quality: "enhanced"
+      gender: "male"
+      description: "Voix française masculine améliorée"
+      
+    - name: "Aurélie (Enhanced)"
+      id: "Aurélie (Enhanced)"
+      language: "fr_FR"
+      quality: "enhanced"
+      gender: "female"
+      description: "Voix française féminine améliorée"
+
+  recommended_settings:
+    voice: "Audrey (Premium)"  # Meilleure qualité vocale
+    rate: 165  # Vitesse optimale pour la compréhension
+    volume: 0.95  # Volume élevé pour clarté
+    
+  fallback_order:
+    - "Audrey (Premium)"
+    - "Thomas (Enhanced)" 
+    - "Aurélie (Enhanced)"
+    - "Jacques"  # Voix standard française
