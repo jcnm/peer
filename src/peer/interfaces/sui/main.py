@@ -325,6 +325,19 @@ class SpeechUserInterface:
         try:
             self.logger.info(f"🧠 Processing intent: {intent_result.command_type} (confidence: {intent_result.confidence:.2f})")
             
+            # Announce what we're about to do
+            action_announcement = self._generate_action_announcement(intent_result, recognition_text)
+            if action_announcement:
+                self.logger.info(f"🔊 Announcing action: {action_announcement}")
+                # Use direct TTS for immediate feedback
+                try:
+                    import platform
+                    if platform.system() == 'Darwin':  # macOS
+                        import subprocess
+                        subprocess.run(['say', '-v', 'Audrey', action_announcement], check=False)
+                except Exception as e:
+                    self.logger.warning(f"Direct TTS failed: {e}")
+            
             # Command type mapping from NLP engine strings to CommandType enum
             command_type_mapping = {
                 "help": CommandType.HELP,
@@ -355,22 +368,77 @@ class SpeechUserInterface:
             # Update context
             self._update_context(intent_result)
             
+            # Generate detailed result announcement
+            result_message = self._generate_result_announcement(response, command_type, recognition_text)
+            
             # Return response message for TTS
             if response:
                 if response.type == ResponseType.QUIT:
                     self.is_running = False
-                    return response.message or "Au revoir !"
+                    return result_message or "Au revoir !"
                 elif response.type == ResponseType.ERROR:
-                    return f"Erreur : {response.message}"
+                    return result_message or f"Erreur : {response.message}"
                 else:
-                    return response.message or "Commande exécutée avec succès"
+                    return result_message or "Commande exécutée avec succès"
             
-            return "Commande traitée"
+            return result_message or "Commande traitée"
             
         except Exception as e:
             self.logger.error(f"❌ Error handling voice command: {e}")
             return f"Erreur lors du traitement de la commande : {str(e)}"
     
+    def _generate_action_announcement(self, intent_result, recognition_text: str) -> str:
+        """Generate an announcement of what action is about to be performed."""
+        command_type = intent_result.command_type.lower()
+        
+        announcements = {
+            "help": "Je vais vous donner les informations d'aide disponibles.",
+            "status": "Je vérifie le statut du système pour vous.",
+            "time": "Je regarde l'heure actuelle.",
+            "date": "Je consulte la date d'aujourd'hui.",
+            "version": "Je vérifie la version du système.",
+            "capabilities": "Je vais vous expliquer mes capacités.",
+            "echo": f"Je vais répéter ce que vous avez dit : {recognition_text}",
+            "quit": "Je vais arrêter le système comme demandé.",
+            "analyze": "Je vais analyser les informations disponibles.",
+            "analysis": "Je commence l'analyse des données.",
+        }
+        
+        return announcements.get(command_type, f"Je traite votre demande : {recognition_text}")
+    
+    def _generate_result_announcement(self, response, command_type, original_text: str) -> str:
+        """Generate a detailed announcement of what was accomplished."""
+        if not response:
+            return "La commande a été traitée mais aucun résultat n'est disponible."
+        
+        base_message = response.message or ""
+        
+        # Add context-specific completion messages
+        completion_messages = {
+            CommandType.HELP: "Voici les informations d'aide demandées.",
+            CommandType.STATUS: "Le statut du système a été vérifié avec succès.",
+            CommandType.TIME: "Voici l'heure actuelle.",
+            CommandType.DATE: "Voici la date d'aujourd'hui.",
+            CommandType.VERSION: "Voici les informations de version.",
+            CommandType.CAPABILITIES: "Voici un résumé de mes capacités.",
+            CommandType.ECHO: "J'ai répété votre message comme demandé.",
+            CommandType.QUIT: "Le système va s'arrêter maintenant. Au revoir !",
+        }
+        
+        prefix = completion_messages.get(command_type, "Voici le résultat de votre demande :")
+        
+        if response.type == ResponseType.SUCCESS:
+            if base_message:
+                return f"{prefix} {base_message}"
+            else:
+                return f"{prefix} La commande a été exécutée avec succès."
+        elif response.type == ResponseType.ERROR:
+            return f"Désolé, une erreur s'est produite : {base_message}"
+        elif response.type == ResponseType.PROGRESS:
+            return f"En cours de traitement : {base_message}"
+        else:
+            return f"{prefix} {base_message}" if base_message else prefix
+
     def start_voice_processing(self):
         """Start the voice processing pipeline using the state machine."""
         if not self.voice_state_machine:

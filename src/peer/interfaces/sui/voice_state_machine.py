@@ -372,12 +372,15 @@ class VoiceStateMachine:
             self.state = VoiceInterfaceState.IDLE
     
     def _send_to_daemon(self, intent: IntentContext):
-        """Envoie l'intention au démon Peer."""
+        """Envoie l'intention au démon Peer avec feedback vocal amélioré."""
         try:
             if not self.peer_daemon:
-                self.say("Le service Peer n'est pas disponible.")
+                self.say("Le service Peer n'est pas disponible. Je ne peux pas traiter votre demande.")
                 self.state = VoiceInterfaceState.IDLE
                 return
+            
+            # Announce what we're doing
+            self.say(f"Je traite votre demande : {intent.summary}")
             
             # Utiliser le command_handler si disponible
             if self.command_handler:
@@ -391,26 +394,61 @@ class VoiceStateMachine:
                         self.confidence = intent_context.confidence
                 
                 mock_intent = MockIntentResult(intent)
+                
+                # Announce the processing step
+                self.say("Je transmets votre commande au système principal.")
+                
                 response_message = self.command_handler(mock_intent, intent.text)
                 
                 # Incrémenter les statistiques
                 self.commands_processed += 1
                 
                 if response_message:
-                    self.say(response_message)
+                    # Provide detailed feedback about what was accomplished
+                    completion_feedback = self._generate_completion_feedback(intent, response_message)
+                    self.say(completion_feedback)
+                else:
+                    self.say("La commande a été traitée mais aucun résultat spécifique n'est disponible.")
                 
                 self.state = VoiceInterfaceState.IDLE
                 return
             
             # Fallback vers la simulation si pas de handler
             self.logger.info(f"📤 Envoi au démon: {intent.intent_type}")
+            self.say("Je transmets votre demande au système. Veuillez patienter un moment.")
             self.state = VoiceInterfaceState.AWAIT_RESPONSE
             threading.Timer(2.0, self._simulate_daemon_response).start()
             
         except Exception as e:
             self.logger.error(f"❌ Erreur lors de l'envoi au démon: {e}")
-            self.say("Erreur lors de l'exécution de la commande.")
+            self.say(f"Désolé, une erreur s'est produite lors du traitement de votre demande : {str(e)}")
             self.state = VoiceInterfaceState.IDLE
+    
+    def _generate_completion_feedback(self, intent: IntentContext, response_message: str) -> str:
+        """Generate detailed feedback about what was accomplished."""
+        intent_type = intent.intent_type.lower()
+        
+        # Create context-aware feedback based on the intent type
+        feedback_templates = {
+            "help": "J'ai récupéré les informations d'aide. Voici ce que j'ai trouvé :",
+            "status": "J'ai vérifié le statut du système. Voici les informations :",
+            "time": "J'ai consulté l'horloge système. Il est actuellement :",
+            "date": "J'ai vérifié la date. Nous sommes le :",
+            "version": "J'ai consulté les informations de version. Voici les détails :",
+            "capabilities": "J'ai listé mes capacités. Voici ce que je peux faire :",
+            "echo": "J'ai bien reçu votre message et je le répète :",
+            "quit": "J'ai initié la procédure d'arrêt. Le système va s'arrêter maintenant.",
+            "analyze": "J'ai terminé l'analyse. Voici les résultats :",
+            "analysis": "L'analyse est terminée. Voici ce que j'ai découvert :",
+        }
+        
+        prefix = feedback_templates.get(intent_type, "J'ai traité votre demande. Voici le résultat :")
+        
+        # Combine the contextual prefix with the actual response
+        if response_message and response_message.strip():
+            return f"{prefix} {response_message}"
+        else:
+            return f"{prefix} La commande a été exécutée avec succès."
     
     def _simulate_daemon_response(self):
         """Simule une réponse du démon (à remplacer par la vraie implémentation)."""
@@ -598,3 +636,5 @@ class VoiceStateMachine:
         """Reprend le traitement."""
         # TODO: Implémenter la reprise
         pass
+```
+</copilot-edited-file>
