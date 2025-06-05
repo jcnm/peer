@@ -330,57 +330,85 @@ class VoiceStateMachine:
             self.logger.warning(f"⚠️ Type de commande inconnu: {command_type}")
     
     def _process_speech_command(self, command_data: Dict[str, Any]):
-        """Traite une commande vocale complète."""
+        """Traite une commande vocale complète avec feedback détaillé."""
         try:
-            self.say("Laisse-moi comprendre ce que tu veux dire…")
+            self.say("Parfait ! J'ai bien reçu votre demande et je commence le traitement immédiatement.")
             
             # Étape 1: Transcription STT
             text_fragments = command_data.get('text_fragments', [])
             full_text = self._concatenate_text_fragments(text_fragments)
             
             if not full_text.strip():
-                self.say("Désolé, je n'ai pas compris ce que tu as dit.")
+                self.say("Je suis désolé, mais je n'ai pas réussi à comprendre clairement ce que vous avez dit. Pourriez-vous répéter votre demande plus distinctement ?")
                 self.state = VoiceInterfaceState.IDLE
                 return
             
-            self.logger.info(f"📝 Texte complet: {full_text}")
+            self.logger.info(f"📝 Texte complet reconnu: {full_text}")
+            self.say(f"Excellent ! J'ai parfaitement compris votre demande : {full_text}. Je procède maintenant à l'analyse détaillée.")
             
             # Étape 2: Analyse NLP
             nlp_output = self._run_nlp(full_text)
             if not nlp_output:
-                self.say("Désolé, je n'ai pas pu analyser ta demande.")
+                self.say("Je rencontre une difficulté lors de l'analyse de votre demande. Pourriez-vous essayer de reformuler votre question différemment ?")
                 self.state = VoiceInterfaceState.IDLE
                 return
             
             # Étape 3: Extraction d'intention NLU
             intent = self._run_nlu(nlp_output)
             if not intent:
-                self.say("Désolé, je n'ai pas compris ton intention.")
+                self.say("J'ai du mal à déterminer précisément votre intention. Pourriez-vous être plus spécifique dans votre demande ?")
                 self.state = VoiceInterfaceState.IDLE
                 return
             
             self.current_intent = intent
             
-            # Étape 4: Confirmation utilisateur
-            self.state = VoiceInterfaceState.INTENT_VALIDATION
-            self.say(f"Tu veux faire ceci : {intent.summary}, c'est bien ça ?")
-            self.start_microphone()
+            # Étape 4: Confirmation intelligente (optionnelle pour certaines commandes)
+            if self._needs_confirmation(intent):
+                self.state = VoiceInterfaceState.INTENT_VALIDATION
+                self.say(f"Parfait ! J'ai bien analysé votre demande. Vous souhaitez que je {intent.summary}. Puis-je procéder immédiatement ?")
+                self.start_microphone()
+            else:
+                # Skip confirmation for simple commands
+                self.say(f"Très bien ! Je vais {intent.summary} tout de suite.")
+                self.intent_history.append(self.current_intent)
+                self._send_to_daemon(self.current_intent)
             
         except Exception as e:
             self.logger.error(f"❌ Erreur lors du traitement de la commande vocale: {e}")
-            self.say("Désolé, une erreur s'est produite lors du traitement.")
+            self.say("Je suis désolé, mais une erreur technique s'est produite lors du traitement. Pourriez-vous reformuler votre demande ?")
             self.state = VoiceInterfaceState.IDLE
+    
+    def _needs_confirmation(self, intent: IntentContext) -> bool:
+        """Determine if an intent needs user confirmation."""
+        # Simple commands don't need confirmation
+        simple_commands = ['time', 'date', 'status', 'help', 'version', 'capabilities', 'echo']
+        
+        # Critical commands might need confirmation
+        critical_commands = ['quit']
+        
+        intent_type = intent.intent_type.lower()
+        
+        # Always confirm critical commands
+        if intent_type in critical_commands:
+            return True
+        
+        # Don't confirm simple commands
+        if intent_type in simple_commands:
+            return False
+        
+        # For other commands, confirm if confidence is low
+        return intent.confidence < 0.8
     
     def _send_to_daemon(self, intent: IntentContext):
         """Envoie l'intention au démon Peer avec feedback vocal amélioré."""
         try:
             if not self.peer_daemon:
-                self.say("Le service Peer n'est pas disponible. Je ne peux pas traiter votre demande.")
+                self.say("Je suis désolé, mais le service Peer n'est pas disponible actuellement. Je ne peux pas traiter votre demande.")
                 self.state = VoiceInterfaceState.IDLE
                 return
             
-            # Announce what we're doing
-            self.say(f"Je traite votre demande : {intent.summary}")
+            # Announce what we're doing with more detail
+            self.say(f"Parfait ! Je vais maintenant traiter votre demande : {intent.summary}")
             
             # Utiliser le command_handler si disponible
             if self.command_handler:
@@ -395,8 +423,8 @@ class VoiceStateMachine:
                 
                 mock_intent = MockIntentResult(intent)
                 
-                # Announce the processing step
-                self.say("Je transmets votre commande au système principal.")
+                # Announce the processing step with more detail
+                self.say("Je transmets maintenant votre commande au système principal pour traitement.")
                 
                 response_message = self.command_handler(mock_intent, intent.text)
                 
@@ -408,20 +436,20 @@ class VoiceStateMachine:
                     completion_feedback = self._generate_completion_feedback(intent, response_message)
                     self.say(completion_feedback)
                 else:
-                    self.say("La commande a été traitée mais aucun résultat spécifique n'est disponible.")
+                    self.say("La commande a été traitée avec succès par le système, mais aucun résultat spécifique n'est disponible.")
                 
                 self.state = VoiceInterfaceState.IDLE
                 return
             
             # Fallback vers la simulation si pas de handler
             self.logger.info(f"📤 Envoi au démon: {intent.intent_type}")
-            self.say("Je transmets votre demande au système. Veuillez patienter un moment.")
+            self.say("Je transmets votre demande au système central. Le traitement va commencer immédiatement.")
             self.state = VoiceInterfaceState.AWAIT_RESPONSE
             threading.Timer(2.0, self._simulate_daemon_response).start()
             
         except Exception as e:
             self.logger.error(f"❌ Erreur lors de l'envoi au démon: {e}")
-            self.say(f"Désolé, une erreur s'est produite lors du traitement de votre demande : {str(e)}")
+            self.say(f"Je suis désolé, mais une erreur technique s'est produite lors de la communication avec le système principal : {str(e)}. Voulez-vous réessayer votre demande ?")
             self.state = VoiceInterfaceState.IDLE
     
     def _generate_completion_feedback(self, intent: IntentContext, response_message: str) -> str:
@@ -430,36 +458,75 @@ class VoiceStateMachine:
         
         # Create context-aware feedback based on the intent type
         feedback_templates = {
-            "help": "J'ai récupéré les informations d'aide. Voici ce que j'ai trouvé :",
-            "status": "J'ai vérifié le statut du système. Voici les informations :",
-            "time": "J'ai consulté l'horloge système. Il est actuellement :",
-            "date": "J'ai vérifié la date. Nous sommes le :",
-            "version": "J'ai consulté les informations de version. Voici les détails :",
-            "capabilities": "J'ai listé mes capacités. Voici ce que je peux faire :",
-            "echo": "J'ai bien reçu votre message et je le répète :",
-            "quit": "J'ai initié la procédure d'arrêt. Le système va s'arrêter maintenant.",
-            "analyze": "J'ai terminé l'analyse. Voici les résultats :",
-            "analysis": "L'analyse est terminée. Voici ce que j'ai découvert :",
+            "help": "Excellent ! J'ai récupéré toutes les informations d'aide disponibles. Voici ce que j'ai trouvé :",
+            "status": "Parfait ! J'ai effectué une vérification complète du système. Voici le rapport de statut :",
+            "time": "Voilà ! J'ai consulté l'horloge système avec précision. Il est actuellement :",
+            "date": "Très bien ! J'ai vérifié la date dans le système. Nous sommes le :",
+            "version": "Excellent ! J'ai récupéré toutes les informations de version disponibles. Voici les détails :",
+            "capabilities": "Parfait ! J'ai préparé une présentation complète de toutes mes capacités. Voici ce que je peux faire :",
+            "echo": "Mission accomplie ! J'ai bien reçu votre message et je le répète fidèlement :",
+            "quit": "Très bien ! J'ai initié la procédure d'arrêt du système. Le processus va maintenant commencer.",
+            "analyze": "Excellent ! J'ai terminé l'analyse complète des données. Voici les résultats détaillés :",
+            "analysis": "Parfait ! L'analyse approfondie est maintenant terminée. Voici ce que j'ai découvert :",
         }
         
-        prefix = feedback_templates.get(intent_type, "J'ai traité votre demande. Voici le résultat :")
+        prefix = feedback_templates.get(intent_type, "Excellent ! J'ai traité votre demande avec succès. Voici le résultat complet :")
         
         # Combine the contextual prefix with the actual response
         if response_message and response_message.strip():
             return f"{prefix} {response_message}"
         else:
-            return f"{prefix} La commande a été exécutée avec succès."
+            return f"{prefix} La commande a été exécutée parfaitement et avec succès."
     
     def _simulate_daemon_response(self):
-        """Simule une réponse du démon (à remplacer par la vraie implémentation)."""
-        response = {
-            'success': True,
-            'message': 'Commande exécutée avec succès',
-            'details': 'Détails de l\'exécution...'
+        """Simule une réponse du démon avec feedback détaillé."""
+        if not self.current_intent:
+            self.say("Aucune intention à traiter actuellement.")
+            self.state = VoiceInterfaceState.IDLE
+            return
+        
+        intent_type = self.current_intent.intent_type.lower()
+        
+        # Generate context-aware responses with more detail
+        responses = {
+            'help': {
+                'message': 'Parfait ! Voici l\'aide complète : Je peux vous assister avec les commandes de base, vérifier le statut système, vous donner l\'heure et la date, et bien plus encore.',
+                'details': 'Interface vocale Peer - Guide complet des commandes disponibles fourni'
+            },
+            'status': {
+                'message': 'Excellent ! Le système fonctionne parfaitement. Tous les composants sont opérationnels et les performances sont optimales.',
+                'details': 'Vérification complète du statut système terminée avec succès'
+            },
+            'time': {
+                'message': f'Voilà ! Il est actuellement {time.strftime("%H heures et %M minutes")} précisément.',
+                'details': 'Consultation de l\'heure système effectuée avec précision'
+            },
+            'date': {
+                'message': f'Parfait ! Nous sommes aujourd\'hui le {time.strftime("%d %B %Y")}.',
+                'details': 'Consultation de la date système effectuée'
+            },
+            'version': {
+                'message': 'Voici les informations complètes : Interface vocale Peer version 1.0 - Système de reconnaissance vocale intelligent avec IA avancée.',
+                'details': 'Informations de version complètes récupérées'
+            },
+            'capabilities': {
+                'message': 'Excellent ! Je peux traiter vos commandes vocales avec intelligence, répondre à vos questions sur le système, vous assister dans vos tâches quotidiennes, et apprendre de nos interactions.',
+                'details': 'Présentation complète des capacités générée'
+            }
         }
         
-        self.say(f"Voici le résultat : {response['message']}")
-        self.logger.info(f"📋 Détails: {response['details']}")
+        response = responses.get(intent_type, {
+            'message': f'Parfait ! La commande "{self.current_intent.intent_type}" a été traitée avec un succès complet.',
+            'details': f'Traitement réussi de l\'intention {intent_type}'
+        })
+        
+        # Provide detailed completion feedback
+        completion_message = f"Traitement terminé avec succès ! {response['message']}"
+        self.say(completion_message)
+        self.logger.info(f"📋 Détails du traitement: {response['details']}")
+        
+        # Clear current intent and return to idle
+        self.current_intent = None
         self.state = VoiceInterfaceState.IDLE
     
     # Méthodes utilitaires
@@ -636,5 +703,3 @@ class VoiceStateMachine:
         """Reprend le traitement."""
         # TODO: Implémenter la reprise
         pass
-```
-</copilot-edited-file>

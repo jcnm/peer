@@ -72,9 +72,8 @@ def test_speech_recognition():
         config = {
             "engines": {
                 "mock": {"enabled": True},
-                "whisper": {"enabled": False},  # Désactivé pour les tests
-                "vosk": {"enabled": False},
-                "wav2vec2": {"enabled": False}
+                "whisperx": {"enabled": False},  # Désactivé pour les tests
+                "vosk": {"enabled": False}
             }
         }
         

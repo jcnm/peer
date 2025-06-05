@@ -112,8 +112,8 @@ class VoiceActivityDetector:
         else:
             return self._energy_based_vad(audio_data)
     
-    def _energy_based_vad(self, audio_data: bytes, threshold: float = 0.01) -> bool:
-        """VAD basé sur l'énergie audio."""
+    def _energy_based_vad(self, audio_data: bytes, threshold: float = 0.005) -> bool:
+        """VAD basé sur l'énergie audio avec seuil plus bas."""
         try:
             # Convertir en numpy array
             audio_array = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32) / 32768.0
@@ -121,7 +121,16 @@ class VoiceActivityDetector:
             # Calculer l'énergie RMS
             energy = np.sqrt(np.mean(audio_array ** 2))
             
-            return energy > threshold
+            # Utiliser un seuil plus bas pour détecter plus de parole
+            is_speech = energy > threshold
+            
+            # Log détaillé pour le débogage
+            if is_speech:
+                self.logger.debug(f"🔊 Énergie audio: {energy:.4f} > {threshold:.4f} => PAROLE")
+            else:
+                self.logger.debug(f"🔈 Énergie audio: {energy:.4f} <= {threshold:.4f} => silence")
+                
+            return is_speech
             
         except Exception as e:
             self.logger.debug(f"Erreur calcul énergie: {e}")

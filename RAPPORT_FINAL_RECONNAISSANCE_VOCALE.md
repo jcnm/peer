@@ -8,10 +8,9 @@
 - **Impact** : Résolution complète des erreurs de reconnaissance vocale
 
 ### 2. **Système de Reconnaissance Vocale Multi-Engine (NOUVEAU)**
-- **Implémentation** : Système complet supportant 4 moteurs STT :
+- **Implémentation** : Système complet supportant 3 moteurs STT :
   - **Whisper** (priorité 1) - OpenAI, haute qualité
   - **Vosk** (priorité 2) - Offline, français
-  - **Wav2Vec2** (priorité 3) - Facebook/Meta
   - **Mock** (fallback) - Simulation pour tests
 - **Fichier** : `/src/peer/interfaces/sui/speech_recognizer.py` (réécriture complète)
 
@@ -32,7 +31,6 @@
 SpeechRecognizer
 ├── Whisper (medium) → Qualité maximale
 ├── Vosk (français) → Offline rapide  
-├── Wav2Vec2 → Alternative robuste
 └── Mock → Tests et fallback
 ```
 
@@ -43,14 +41,14 @@ Audio Microphone → Capture PyAudio → Moteur STT → NLU → Commande
 ```
 
 ### Gestion des Fallbacks
-- **Cascade intelligente** : Si Whisper échoue → Vosk → Wav2Vec2 → Mock
+- **Cascade intelligente** : Si Whisper échoue → Vosk → Mock
 - **Logging détaillé** : Traçabilité complète des tentatives
 - **Récupération gracieuse** : Aucune interruption de service
 
 ## 📊 STATUT ACTUEL
 
 ### ✅ FONCTIONNEL
-- [x] Initialisation des 4 moteurs STT
+- [x] Initialisation des 3 moteurs STT
 - [x] Reconnaissance vocale avec capture audio réelle
 - [x] Système de fallback automatique
 - [x] Intégration NLU sans erreurs d'embedding
@@ -62,12 +60,10 @@ Audio Microphone → Capture PyAudio → Moteur STT → NLU → Commande
 - [ ] **Commandes limitées** : Seule la commande PROMPT est reconnue
 - [ ] **VAD manquant** : Pas de détection d'activité vocale
 - [ ] **Modèles lourds** : Temps de chargement initial ~30s
-- [ ] **Torch 2.6 requis** : Pour Wav2Vec2 français (CVE-2025-32434)
 
 ### 🎯 PERFORMANCES
 - **Whisper** : ~2-5s de traitement, excellente qualité
 - **Vosk** : ~1-2s, bon pour commandes courtes
-- **Wav2Vec2** : ~1-3s, modèle anglais fonctionnel
 - **Chargement initial** : ~30s (modèles lourds)
 
 ## 🔧 CONFIGURATION
@@ -78,7 +74,6 @@ stt_whisper_settings:
   engines:
     whisper: { model: "medium", language: "fr" }
     vosk: { model_path: "vepeer/models/vosk/vosk-model-fr-0.22" }
-    wav2vec2: { model: "facebook/wav2vec2-base-960h" }
     mock: { enabled: true }
 ```
 
@@ -131,7 +126,7 @@ python -m peer.interfaces.sui.main
 - ❌ **Embedding mismatch** : Dimensions adaptatives NLU
 
 ### Nouvelles Capacités
-- ✅ **Reconnaissance vocale robuste** : 4 moteurs avec fallbacks
+- ✅ **Reconnaissance vocale robuste** : 3 moteurs avec fallbacks
 - ✅ **Capture audio interactive** : Interface utilisateur améliorée
 - ✅ **NLU multi-modèle** : Cache et compatibilité améliorés
 - ✅ **Logging avancé** : Debugging et monitoring détaillés

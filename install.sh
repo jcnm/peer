@@ -1096,7 +1096,6 @@ install_speech_recognition() {
     # Variables to track installation status
     local whisper_installed=false
     local vosk_installed=false
-    local wav2vec2_installed=false
     
     # Check if engines are already installed
     if python_module_exists whisperx && [[ "$FORCE_INSTALL" != true ]]; then
@@ -1105,13 +1104,10 @@ install_speech_recognition() {
     elif python_module_exists vosk && [[ "$FORCE_INSTALL" != true ]]; then
         vosk_installed=true
         print_message "success" "Vosk is already installed"
-    elif python_module_exists transformers && python_module_exists torch && python_module_exists torchaudio && python_module_exists soundfile && [[ "$FORCE_INSTALL" != true ]]; then
-        wav2vec2_installed=true
-        print_message "success" "Wav2Vec2 dependencies are already installed"
     fi
     
     # If no engines are installed or force installation is requested, proceed with installation
-    if [[ "$whisper_installed" == false ]] && [[ "$vosk_installed" == false ]] && [[ "$wav2vec2_installed" == false ]] || [[ "$FORCE_INSTALL" == true ]]; then
+    if [[ "$whisper_installed" == false ]] && [[ "$vosk_installed" == false ]] || [[ "$FORCE_INSTALL" == true ]]; then
         # Determine PyTorch version based on Python version
         local torch_version
         local python_minor_version
@@ -1207,50 +1203,11 @@ install_speech_recognition() {
                 print_message "warning" "Vosk installation failed"
             fi
         fi
-        
-        # 3. Try to install Wav2Vec2 if both WhisperX and Vosk installation failed
-        if [[ "$whisper_installed" == false ]] && [[ "$vosk_installed" == false ]]; then
-            print_message "info" "Attempting to install Wav2Vec2 (Meta)..."
-            
-            # First ensure NumPy 1.x is installed
-            pip install "numpy<2.0" --force-reinstall
-            
-            if pip install transformers "torch==$torch_version" torchaudio soundfile; then
-                # Verify importability
-                if python_module_exists transformers && python_module_exists torch && python_module_exists torchaudio && python_module_exists soundfile; then
-                    wav2vec2_installed=true
-                    print_message "success" "Wav2Vec2 installation successful"
-                    
-                    # Download French Wav2Vec2 model if not skipped
-                    if [[ "$SKIP_MODELS_DOWNLOAD" != true ]]; then
-                        # Check if model already exists
-                        local wav2vec2_model_exists=false
-                        if [[ -d "$VIRTUAL_ENV/models/wav2vec2" ]]; then
-                            wav2vec2_model_exists=true
-                            print_message "success" "Wav2Vec2 French model already downloaded"
-                        fi
-                        
-                        if [[ "$wav2vec2_model_exists" == false ]]; then
-                            print_message "info" "Downloading French Wav2Vec2 model (this may take a few minutes)..."
-                            if python -c "from transformers import Wav2Vec2ForCTC, Wav2Vec2Processor; processor = Wav2Vec2Processor.from_pretrained('facebook/wav2vec2-large-xlsr-53-french'); model = Wav2Vec2ForCTC.from_pretrained('facebook/wav2vec2-large-xlsr-53-french'); processor.save_pretrained('$VIRTUAL_ENV/models/wav2vec2'); model.save_pretrained('$VIRTUAL_ENV/models/wav2vec2')" 2>/dev/null; then
-                                print_message "success" "Wav2Vec2 model download successful"
-                            else
-                                print_message "warning" "Wav2Vec2 model download failed, it will be downloaded on first use"
-                            fi
-                        fi
-                    fi
-                else
-                    print_message "warning" "Wav2Vec2 installation failed (modules not importable)"
-                fi
-            else
-                print_message "warning" "Wav2Vec2 installation failed"
-            fi
-        fi
     fi
     
     # Create status file
     print_message "info" "Creating speech recognition engines status file..."
-    echo "{\"whisperx\": $whisper_installed, \"vosk\": $vosk_installed, \"wav2vec2\": $wav2vec2_installed}" > "$VIRTUAL_ENV/stt_engines.json"
+    echo "{\"whisperx\": $whisper_installed, \"vosk\": $vosk_installed}" > "$VIRTUAL_ENV/stt_engines.json"
     
     # Installation summary
     print_message "info" "Speech recognition engines installation summary:"
@@ -1258,8 +1215,6 @@ install_speech_recognition() {
         print_message "success" "✓ WhisperX installed and will be used for speech recognition"
     elif [[ "$vosk_installed" == true ]]; then
         print_message "success" "✓ Vosk installed and will be used for speech recognition"
-    elif [[ "$wav2vec2_installed" == true ]]; then
-        print_message "success" "✓ Wav2Vec2 (Meta) installed and will be used for speech recognition"
     else
         print_message "error" "✗ No speech recognition engine could be installed"
         print_message "info" "The SUI interface will work in degraded mode"
@@ -1307,13 +1262,6 @@ verify_installation() {
         print_message "success" "Vosk is importable"
     else
         print_message "info" "Vosk is not importable (alternative to WhisperX)"
-    fi
-    
-    # Check Wav2Vec2
-    if python_module_exists transformers && python_module_exists torchaudio && python_module_exists soundfile; then
-        print_message "success" "Wav2Vec2 dependencies are importable"
-    else
-        print_message "info" "Wav2Vec2 dependencies are not importable (alternative to WhisperX)"
     fi
     
     # Check PyAudio

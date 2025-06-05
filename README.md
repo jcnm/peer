@@ -15,9 +15,8 @@ Peer Minimal est une version simplifiée de l'application Peer, respectant l'arc
   - SUI : Commande vocale "Comment ça va"
 - **Interface SUI améliorée** :
   - Utilise plusieurs moteurs de reconnaissance vocale 100% locaux :
-    - Whisper (OpenAI) - Haute qualité
+    - WhisperX (OpenAI) - Haute qualité avec alignement amélioré
     - Vosk - Léger et rapide
-    - Wav2Vec2 (Meta) - Alternative puissante
   - Analyse la machine au démarrage avec commentaire humoristique
   - Annonce l'heure chaque minute pendant l'écoute
   - Fournit un indicateur visuel d'état (écoute, parole, attente)
@@ -42,7 +41,7 @@ Le projet suit une architecture hexagonale pour une évolution facile (ports et 
   - Interface textuelle (TUI)
   - Interface API REST
   - Interface vocale bidirectionnelle (SUI)
-    - Reconnaissance vocale avec plusieurs moteurs (Whisper, Vosk, Wav2Vec2)
+    - Reconnaissance vocale avec plusieurs moteurs (WhisperX, Vosk)
     - Synthèse vocale
 
 ## Prérequis
@@ -71,9 +70,8 @@ chmod +x install.sh
 
 Le script d'installation vérifie d'abord que vous utilisez Python 3.10, puis crée un environnement virtuel `vepeer` et installe toutes les dépendances nécessaires. Il tente d'installer les moteurs de reconnaissance vocale dans l'ordre suivant :
 
-1. **Whisper (OpenAI)** - Reconnaissance vocale de haute qualité, 100% locale
+1. **WhisperX (OpenAI)** - Reconnaissance vocale de haute qualité avec alignement amélioré, 100% locale
 2. **Vosk** - Alternative légère, 100% locale
-3. **Wav2Vec2 (Meta)** - Alternative puissante, 100% locale
 
 ### Installation sur macOS avec Homebrew
 
@@ -83,8 +81,8 @@ Sur macOS, l'installation via Homebrew est automatiquement détectée et configu
 # Installation de Python 3.10
 brew install python@3.10
 
-# Installation de Whisper via Homebrew
-brew install openai-whisper
+# Installation de WhisperX via pip
+pip install whisperx
 
 # Puis exécuter le script d'installation qui configurera automatiquement les chemins
 ./install.sh
@@ -108,7 +106,7 @@ brew install openai-whisper
 ./install.sh --help
 ```
 
-Le script d'installation détecte l'installation Homebrew et configure automatiquement l'environnement Python pour utiliser Whisper.
+Le script d'installation détecte l'installation pip et configure automatiquement l'environnement Python pour utiliser WhisperX.
 
 ### Diagnostic des problèmes d'installation
 
@@ -136,12 +134,11 @@ Pour une installation entièrement hors ligne, vous pouvez préparer les package
 
 #### Pour macOS
 ```bash
-# Installation via Homebrew
-brew install python@3.10
-brew install openai-whisper
+# Installation via pip
+pip install whisperx
 
 # Ou téléchargement des modèles à l'avance
-python3.10 -m pip download openai-whisper torch==2.2.2 torchaudio -d ./offline_packages
+python3.10 -m pip download whisperx torch==2.2.2 torchaudio -d ./offline_packages
 python3.10 -m pip download vosk -d ./offline_packages
 python3.10 -m pip download transformers torch==2.2.2 torchaudio soundfile -d ./offline_packages
 ```
@@ -149,7 +146,7 @@ python3.10 -m pip download transformers torch==2.2.2 torchaudio soundfile -d ./o
 #### Pour Linux
 ```bash
 # Téléchargement des packages
-python3.10 -m pip download openai-whisper torch==2.2.2 torchaudio -d ./offline_packages
+python3.10 -m pip download whisperx torch==2.2.2 torchaudio -d ./offline_packages
 python3.10 -m pip download vosk -d ./offline_packages
 python3.10 -m pip download transformers torch==2.2.2 torchaudio soundfile -d ./offline_packages
 
@@ -160,14 +157,14 @@ sudo apt-get install -y python3-pyaudio portaudio19-dev espeak
 #### Pour Windows
 ```bash
 # Téléchargement des packages
-python3.10 -m pip download openai-whisper torch==2.2.2 torchaudio -d ./offline_packages
+python3.10 -m pip download whisperx torch==2.2.2 torchaudio -d ./offline_packages
 python3.10 -m pip download vosk -d ./offline_packages
 python3.10 -m pip download transformers torch==2.2.2 torchaudio soundfile -d ./offline_packages
 ```
 
 Puis, pour installer à partir des packages téléchargés :
 ```bash
-pip install --no-index --find-links=./offline_packages openai-whisper torch==2.2.2
+pip install --no-index --find-links=./offline_packages whisperx torch==2.2.2
 # ou
 pip install --no-index --find-links=./offline_packages vosk
 # ou
@@ -337,34 +334,32 @@ pip install --no-index --find-links=./offline_packages transformers torch==2.0.1
 ## Résolution des problèmes courants
 
 ### Problème : "Version de Python incorrecte"
-Ce problème se produit lorsque vous n'utilisez pas Python 3.10, qui est requis pour la compatibilité avec PyTorch et Whisper.
+Ce problème se produit lorsque vous n'utilisez pas Python 3.10, qui est requis pour la compatibilité avec PyTorch et WhisperX.
 
 **Solution** :
 1. Installez Python 3.10 selon votre système d'exploitation
 2. Supprimez l'environnement virtuel existant : `rm -rf vepeer`
 3. Réexécutez le script d'installation : `./install.sh`
 
-### Problème : "Whisper est marqué comme installé mais les bibliothèques ne sont pas disponibles"
-Ce problème se produit généralement sur macOS lorsque Whisper est installé via Homebrew mais n'est pas accessible depuis l'environnement virtuel Python.
+### Problème : "WhisperX est marqué comme installé mais les bibliothèques ne sont pas disponibles"
+Ce problème se produit généralement lorsque WhisperX n'est pas accessible depuis l'environnement virtuel Python.
 
 **Solution** :
 1. Exécutez le script de diagnostic : `./diagnose.sh`
 2. Suivez les recommandations spécifiques à votre système
-3. Pour macOS avec Homebrew, le script d'installation devrait maintenant configurer automatiquement les chemins
+3. Le script d'installation devrait maintenant configurer automatiquement l'environnement
 
 ### Problème : "Aucun moteur de reconnaissance vocale n'est disponible"
-Ce problème se produit lorsqu'aucun des moteurs STT (Whisper, Vosk, Wav2Vec2) n'a pu être installé correctement.
+Ce problème se produit lorsqu'aucun des moteurs STT (WhisperX, Vosk) n'a pu être installé correctement.
 
 **Solution** :
 1. Exécutez le script de diagnostic : `./diagnose.sh`
 2. Installez manuellement l'un des moteurs recommandés :
    ```bash
    source vepeer/bin/activate
-   pip install openai-whisper torch==2.2.2
+   pip install whisperx torch==2.2.2
    # ou
    pip install vosk
-   # ou
-   pip install transformers torch==2.2.2 torchaudio soundfile
    ```
 3. Mettez à jour le fichier d'état selon les instructions du diagnostic
 

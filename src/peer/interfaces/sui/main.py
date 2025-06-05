@@ -251,9 +251,8 @@ class SpeechUserInterface:
                     "enabled": True,
                     "engines": {
                         "mock": {"enabled": True, "priority": 1},
-                        "whisper": {"enabled": False}, # Ensure others are disabled
-                        "vosk": {"enabled": False},
-                        "wav2vec2": {"enabled": False}
+                        "whisperx": {"enabled": False}, # Ensure others are disabled
+                        "vosk": {"enabled": False}
                     }
                 }
                 # Add other minimal required config keys if SpeechRecognizer depends on them
@@ -392,19 +391,19 @@ class SpeechUserInterface:
         command_type = intent_result.command_type.lower()
         
         announcements = {
-            "help": "Je vais vous donner les informations d'aide disponibles.",
-            "status": "Je vérifie le statut du système pour vous.",
-            "time": "Je regarde l'heure actuelle.",
-            "date": "Je consulte la date d'aujourd'hui.",
-            "version": "Je vérifie la version du système.",
-            "capabilities": "Je vais vous expliquer mes capacités.",
-            "echo": f"Je vais répéter ce que vous avez dit : {recognition_text}",
-            "quit": "Je vais arrêter le système comme demandé.",
-            "analyze": "Je vais analyser les informations disponibles.",
-            "analysis": "Je commence l'analyse des données.",
+            "help": "Parfait ! Je vais chercher toutes les informations d'aide disponibles pour vous.",
+            "status": "Très bien ! Je lance une vérification complète du statut du système.",
+            "time": "D'accord ! Je consulte l'horloge système pour vous donner l'heure précise.",
+            "date": "Entendu ! Je vérifie la date actuelle dans le système.",
+            "version": "Bien sûr ! Je vais récupérer toutes les informations de version du système.",
+            "capabilities": "Excellente question ! Je vais vous présenter toutes mes capacités en détail.",
+            "echo": f"Compris ! Je vais répéter fidèlement votre message : {recognition_text}",
+            "quit": "Très bien ! Je vais procéder à l'arrêt du système comme vous l'avez demandé.",
+            "analyze": "Parfait ! Je vais effectuer une analyse approfondie des données disponibles.",
+            "analysis": "D'accord ! Je commence l'analyse détaillée des informations.",
         }
         
-        return announcements.get(command_type, f"Je traite votre demande : {recognition_text}")
+        return announcements.get(command_type, f"Entendu ! Je traite immédiatement votre demande : {recognition_text}")
     
     def _generate_result_announcement(self, response, command_type, original_text: str) -> str:
         """Generate a detailed announcement of what was accomplished."""
@@ -415,27 +414,27 @@ class SpeechUserInterface:
         
         # Add context-specific completion messages
         completion_messages = {
-            CommandType.HELP: "Voici les informations d'aide demandées.",
-            CommandType.STATUS: "Le statut du système a été vérifié avec succès.",
-            CommandType.TIME: "Voici l'heure actuelle.",
-            CommandType.DATE: "Voici la date d'aujourd'hui.",
-            CommandType.VERSION: "Voici les informations de version.",
-            CommandType.CAPABILITIES: "Voici un résumé de mes capacités.",
-            CommandType.ECHO: "J'ai répété votre message comme demandé.",
-            CommandType.QUIT: "Le système va s'arrêter maintenant. Au revoir !",
+            CommandType.HELP: "Parfait ! J'ai récupéré toutes les informations d'aide. Voici ce que j'ai trouvé pour vous :",
+            CommandType.STATUS: "Excellent ! La vérification du système est terminée. Voici le rapport de statut :",
+            CommandType.TIME: "Voilà ! J'ai consulté l'horloge système. L'heure actuelle est :",
+            CommandType.DATE: "Parfait ! J'ai vérifié la date dans le système. Nous sommes le :",
+            CommandType.VERSION: "Très bien ! J'ai récupéré toutes les informations de version. Voici les détails :",
+            CommandType.CAPABILITIES: "Excellente question ! J'ai préparé une présentation complète de mes capacités :",
+            CommandType.ECHO: "Mission accomplie ! J'ai bien reçu et je répète votre message comme demandé :",
+            CommandType.QUIT: "Parfait ! Le processus d'arrêt a été initié avec succès. Le système va s'arrêter maintenant. Au revoir !",
         }
         
-        prefix = completion_messages.get(command_type, "Voici le résultat de votre demande :")
+        prefix = completion_messages.get(command_type, "Parfait ! J'ai traité votre demande avec succès. Voici le résultat :")
         
         if response.type == ResponseType.SUCCESS:
             if base_message:
                 return f"{prefix} {base_message}"
             else:
-                return f"{prefix} La commande a été exécutée avec succès."
+                return f"{prefix} La commande a été exécutée parfaitement."
         elif response.type == ResponseType.ERROR:
-            return f"Désolé, une erreur s'est produite : {base_message}"
+            return f"Je suis désolé, mais une erreur s'est produite lors du traitement : {base_message}"
         elif response.type == ResponseType.PROGRESS:
-            return f"En cours de traitement : {base_message}"
+            return f"Traitement en cours, veuillez patienter : {base_message}"
         else:
             return f"{prefix} {base_message}" if base_message else prefix
 

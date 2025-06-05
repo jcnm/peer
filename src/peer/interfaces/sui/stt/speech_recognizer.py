@@ -2,7 +2,7 @@
 Module de reconnaissance vocale automatique (ASR).
 
 Ce module gère :
-- Reconnaissance vocale avec différents moteurs (Whisper, Vosk, Wav2Vec2)
+- Reconnaissance vocale avec différents moteurs (WhisperX, Vosk)
 - Système de fallback automatique
 - Gestion des modèles et configurations
 - Optimisation des performances
@@ -22,11 +22,11 @@ from pathlib import Path
 
 # Imports conditionnels pour les moteurs STT
 try:
-    import whisper
-    WHISPER_AVAILABLE = True
+    import whisperx
+    WHISPERX_AVAILABLE = True
 except ImportError:
-    WHISPER_AVAILABLE = False
-    whisper = None
+    WHISPERX_AVAILABLE = False
+    whisperx = None
 
 try:
     import vosk
@@ -35,20 +35,12 @@ except ImportError:
     VOSK_AVAILABLE = False
     vosk = None
 
-try:
-    from transformers import Wav2Vec2ForCTC, Wav2Vec2Processor
-    import torch
-    WAV2VEC2_AVAILABLE = True
-except ImportError:
-    WAV2VEC2_AVAILABLE = False
-
 from ..domain.models import SpeechRecognitionResult
 
 class ASREngine(Enum):
     """Types de moteurs de reconnaissance vocale supportés."""
-    WHISPER = "whisper"
+    WHISPERX = "whisperx"
     VOSK = "vosk"
-    WAV2VEC2 = "wav2vec2"
     MOCK = "mock"
 
 @dataclass
@@ -65,40 +57,74 @@ class ASRConfig:
         if self.parameters is None:
             self.parameters = {}
 
-class WhisperASR:
-    """Moteur de reconnaissance Whisper (OpenAI)."""
+class WhisperXASR:
+    """Moteur de reconnaissance WhisperX (version améliorée)."""
     
     def __init__(self, config: ASRConfig):
-        self.logger = logging.getLogger("WhisperASR")
+        self.logger = logging.getLogger("WhisperXASR")
         self.config = config
         self.model = None
+        self.align_model = None
+        self.align_metadata = None
         
-        if not WHISPER_AVAILABLE:
-            raise ImportError("Whisper non disponible")
+        if not WHISPERX_AVAILABLE:
+            raise ImportError("WhisperX non disponible")
         
         self._load_model()
     
     def _load_model(self):
-        """Charge le modèle Whisper."""
+        """Charge le modèle WhisperX."""
         model_name = self.config.model_name or "base"
         
         try:
-            self.logger.info(f"📥 Chargement Whisper {model_name}...")
-            self.model = whisper.load_model(model_name)
+            self.logger.info(f"📥 Chargement WhisperX {model_name}...")
             
-            # Test du modèle
-            test_audio = np.zeros(16000, dtype=np.float32)  # 1 seconde de silence
-            result = self.model.transcribe(test_audio, language=self.config.language)
+            # Déterminer le device optimal
+            device = "cpu"
+            compute_type = "int8"
             
-            self.logger.info(f"✅ Whisper {model_name} chargé et testé")
+            # Essayer d'utiliser GPU si disponible
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    device = "cuda"
+                    compute_type = "float16"
+                elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+                    # MPS sur macOS - utiliser CPU pour WhisperX pour éviter les problèmes
+                    device = "cpu"
+                    compute_type = "int8"
+            except ImportError:
+                pass
+            
+            # Charger le modèle principal
+            self.model = whisperx.load_model(
+                model_name, 
+                device=device,
+                compute_type=compute_type
+            )
+            
+            # Charger le modèle d'alignement pour la langue configurée
+            try:
+                language_code = self.config.language if self.config.language in ["en", "fr", "de", "es", "it", "ja", "zh", "nl", "uk", "pt"] else "en"
+                self.align_model, self.align_metadata = whisperx.load_align_model(
+                    language_code=language_code, 
+                    device=device
+                )
+                self.logger.info(f"✅ Modèle d'alignement chargé pour {language_code}")
+            except Exception as e:
+                self.logger.warning(f"⚠️ Impossible de charger le modèle d'alignement: {e}")
+                self.align_model = None
+                self.align_metadata = None
+            
+            self.logger.info(f"✅ WhisperX {model_name} chargé et configuré sur {device}")
             
         except Exception as e:
-            self.logger.error(f"❌ Erreur chargement Whisper: {e}")
+            self.logger.error(f"❌ Erreur chargement WhisperX: {e}")
             raise
     
     def transcribe(self, audio_data: np.ndarray) -> Optional[SpeechRecognitionResult]:
         """
-        Transcrit l'audio avec Whisper.
+        Transcrit l'audio avec WhisperX.
         
         Args:
             audio_data: Données audio (numpy array, float32, 16kHz)
@@ -112,44 +138,70 @@ class WhisperASR:
         try:
             start_time = time.time()
             
-            # Whisper peut traiter directement les numpy arrays
+            # WhisperX transcription avec paramètres optimisés
             result = self.model.transcribe(
                 audio_data,
-                language=self.config.language,
-                task=self.config.parameters.get("task", "transcribe"),
-                temperature=self.config.parameters.get("temperature", 0.0),
-                beam_size=self.config.parameters.get("beam_size", 1),
-                best_of=self.config.parameters.get("best_of", 1),
-                fp16=self.config.parameters.get("fp16", False),
-                verbose=False
+                batch_size=self.config.parameters.get("batch_size", 16),
+                language=self.config.language if self.config.language != "auto" else None,
+                task=self.config.parameters.get("task", "transcribe")
             )
+            
+            # Vérifier s'il y a des segments
+            if not result.get("segments"):
+                return None
+            
+            # Appliquer l'alignement si disponible pour une meilleure précision
+            if self.align_model and self.align_metadata:
+                try:
+                    result = whisperx.align(
+                        result["segments"], 
+                        self.align_model, 
+                        self.align_metadata, 
+                        audio_data, 
+                        device="cpu"  # Utiliser CPU pour l'alignement pour éviter les problèmes
+                    )
+                except Exception as align_error:
+                    self.logger.warning(f"⚠️ Échec alignement: {align_error}")
+                    # Continuer sans alignement
             
             processing_time = time.time() - start_time
             
-            text = result.get("text", "").strip()
-            if not text:
+            # Extraire le texte des segments
+            text_parts = []
+            total_confidence = 0
+            segment_count = 0
+            
+            for segment in result.get("segments", []):
+                if "text" in segment and segment["text"].strip():
+                    text_parts.append(segment["text"].strip())
+                    
+                    # Calculer la confiance
+                    if "score" in segment:
+                        total_confidence += segment["score"]
+                        segment_count += 1
+                    elif "confidence" in segment:
+                        total_confidence += segment["confidence"]
+                        segment_count += 1
+            
+            if not text_parts:
                 return None
             
-            # Calculer la confiance moyenne à partir des segments
-            confidence = 0.8  # Valeur par défaut
-            if "segments" in result and result["segments"]:
-                segment_confidences = []
-                for segment in result["segments"]:
-                    if "confidence" in segment:
-                        segment_confidences.append(segment["confidence"])
-                if segment_confidences:
-                    confidence = sum(segment_confidences) / len(segment_confidences)
+            text = " ".join(text_parts)
+            confidence = total_confidence / segment_count if segment_count > 0 else 0.8
+            
+            # Détecter la langue si pas spécifiée
+            detected_language = result.get("language", self.config.language)
             
             return SpeechRecognitionResult(
                 text=text,
                 confidence=confidence,
-                language=result.get("language", self.config.language),
+                language=detected_language,
                 processing_time=processing_time,
-                engine_used="whisper"
+                engine_used="whisperx"
             )
             
         except Exception as e:
-            self.logger.error(f"❌ Erreur transcription Whisper: {e}")
+            self.logger.error(f"❌ Erreur transcription WhisperX: {e}")
             return None
 
 class VoskASR:
@@ -242,90 +294,6 @@ class VoskASR:
             self.logger.error(f"❌ Erreur transcription Vosk: {e}")
             return None
 
-class Wav2Vec2ASR:
-    """Moteur de reconnaissance Wav2Vec2 (Facebook/Meta)."""
-    
-    def __init__(self, config: ASRConfig):
-        self.logger = logging.getLogger("Wav2Vec2ASR")
-        self.config = config
-        self.processor = None
-        self.model = None
-        
-        if not WAV2VEC2_AVAILABLE:
-            raise ImportError("Wav2Vec2 non disponible")
-        
-        self._load_model()
-    
-    def _load_model(self):
-        """Charge le modèle Wav2Vec2."""
-        model_name = self.config.model_name or "facebook/wav2vec2-base-960h"
-        
-        try:
-            self.logger.info(f"📥 Chargement Wav2Vec2: {model_name}")
-            
-            self.processor = Wav2Vec2Processor.from_pretrained(model_name)
-            self.model = Wav2Vec2ForCTC.from_pretrained(model_name)
-            
-            self.logger.info(f"✅ Wav2Vec2 chargé: {model_name}")
-            
-        except Exception as e:
-            self.logger.error(f"❌ Erreur chargement Wav2Vec2: {e}")
-            raise
-    
-    def transcribe(self, audio_data: np.ndarray) -> Optional[SpeechRecognitionResult]:
-        """
-        Transcrit l'audio avec Wav2Vec2.
-        
-        Args:
-            audio_data: Données audio (numpy array, float32, 16kHz)
-            
-        Returns:
-            Résultat de la transcription ou None
-        """
-        if self.processor is None or self.model is None:
-            return None
-        
-        try:
-            start_time = time.time()
-            
-            # Preprocessing
-            input_values = self.processor(
-                audio_data, 
-                sampling_rate=16000, 
-                return_tensors="pt", 
-                padding=True
-            ).input_values
-            
-            # Inference
-            with torch.no_grad():
-                logits = self.model(input_values).logits
-            
-            # Décodage
-            predicted_ids = torch.argmax(logits, dim=-1)
-            text = self.processor.batch_decode(predicted_ids)[0]
-            
-            processing_time = time.time() - start_time
-            
-            text = text.strip()
-            if not text:
-                return None
-            
-            # Wav2Vec2 ne fournit pas directement de score de confiance
-            # On peut l'estimer à partir des logits
-            confidence = 0.6  # Valeur conservative
-            
-            return SpeechRecognitionResult(
-                text=text,
-                confidence=confidence,
-                language=self.config.language,
-                processing_time=processing_time,
-                engine_used="wav2vec2"
-            )
-            
-        except Exception as e:
-            self.logger.error(f"❌ Erreur transcription Wav2Vec2: {e}")
-            return None
-
 class MockASR:
     """Moteur de reconnaissance simulé pour les tests."""
     
@@ -396,24 +364,18 @@ class SpeechRecognizer:
         
         # Configuration par défaut
         default_configs = {
-            ASREngine.WHISPER: ASRConfig(
+            ASREngine.WHISPERX: ASRConfig(
                 enabled=True,
                 model_name="base",
                 language="fr",
                 priority=1,
-                parameters={"temperature": 0.0, "beam_size": 1}
+                parameters={"batch_size": 16, "task": "transcribe"}
             ),
             ASREngine.VOSK: ASRConfig(
                 enabled=True,
                 model_path="vepeer/models/vosk/vosk-model-fr-0.22",
                 language="fr",
                 priority=2
-            ),
-            ASREngine.WAV2VEC2: ASRConfig(
-                enabled=True,
-                model_name="facebook/wav2vec2-base-960h",
-                language="en",  # Modèle anglais par défaut
-                priority=3
             ),
             ASREngine.MOCK: ASRConfig(
                 enabled=True,
@@ -458,12 +420,10 @@ class SpeechRecognizer:
     
     def _create_engine(self, engine_type: ASREngine, config: ASRConfig):
         """Crée une instance de moteur ASR."""
-        if engine_type == ASREngine.WHISPER:
-            return WhisperASR(config)
+        if engine_type == ASREngine.WHISPERX:
+            return WhisperXASR(config)
         elif engine_type == ASREngine.VOSK:
             return VoskASR(config)
-        elif engine_type == ASREngine.WAV2VEC2:
-            return Wav2Vec2ASR(config)
         elif engine_type == ASREngine.MOCK:
             return MockASR(config)
         else:
@@ -523,6 +483,35 @@ class SpeechRecognizer:
         
         self.logger.error(f"❌ Tous les moteurs ont échoué. Dernière erreur: {last_error}")
         return None
+    
+    def transcribe_audio(self, audio_data: np.ndarray, use_alignment: bool = False) -> Optional[SpeechRecognitionResult]:
+        """
+        Transcrit les données audio avec options avancées.
+        
+        Args:
+            audio_data: Données audio (numpy array, float32, 16kHz)
+            use_alignment: Utiliser l'alignement pour une meilleure précision
+            
+        Returns:
+            Résultat de la transcription ou None
+        """
+        # Utiliser la méthode standard pour la transcription
+        result = self.transcribe(audio_data)
+        
+        # Si alignement demandé et WhisperX disponible, améliorer la précision
+        if use_alignment and result and ASREngine.WHISPERX in self.engines:
+            try:
+                whisperx_engine = self.engines[ASREngine.WHISPERX]
+                if hasattr(whisperx_engine, 'align_model') and whisperx_engine.align_model:
+                    # Re-faire la transcription avec alignement forcé
+                    aligned_result = whisperx_engine.transcribe(audio_data)
+                    if aligned_result and aligned_result.confidence > result.confidence:
+                        result = aligned_result
+                        self.logger.debug("🎯 Alignement appliqué pour améliorer la précision")
+            except Exception as e:
+                self.logger.warning(f"⚠️ Échec de l'alignement: {e}")
+        
+        return result
     
     def get_available_engines(self) -> List[str]:
         """Retourne la liste des moteurs disponibles."""

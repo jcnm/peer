@@ -1,0 +1,117 @@
+{
+  "summary": {
+    "total_tests": 8,
+    "passed_tests": 8,
+    "success_rate": 1.0,
+    "overall_success": true
+  },
+  "performance_metrics": {
+    "init_time": 0.8913109302520752,
+    "transcription_time": 0.8627989292144775,
+    "words_per_second": 10.431167326776722,
+    "confidence": 0.8,
+    "similarity": 100.0,
+    "avg_time": 0.638979434967041,
+    "min_time": 0.6246590614318848,
+    "max_time": 0.6519391536712646,
+    "avg_confidence": 0.8000000000000002,
+    "consistency": 0.027280092239379883
+  },
+  "test_results": [
+    {
+      "name": "WhisperX Availability",
+      "success": true,
+      "details": {
+        "version": "inconnue",
+        "functions_available": [
+          "load_model",
+          "load_audio",
+          "transcribe",
+          "align"
+        ]
+      },
+      "timestamp": 1749062329.7859478
+    },
+    {
+      "name": "WhisperXASR Class",
+      "success": true,
+      "details": {
+        "init_time": 0.8913109302520752,
+        "model_loaded": true,
+        "alignment_available": true
+      },
+      "timestamp": 1749062330.7768462
+    },
+    {
+      "name": "Audio Generation",
+      "success": true,
+      "details": {
+        "duration": 4.4196875,
+        "sample_rate": 16000,
+        "text": "Bonjour, ceci est un test de reconnaissance vocale française.",
+        "voice": "Audrey"
+      },
+      "timestamp": 1749062331.573458
+    },
+    {
+      "name": "Transcription Quality",
+      "success": true,
+      "details": {
+        "transcription_time": 0.8627989292144775,
+        "confidence": 0.8,
+        "similarity": 100.0,
+        "language": "fr",
+        "words_per_second": 10.431167326776722,
+        "original_text": "Bonjour, ceci est un test de reconnaissance vocale française.",
+        "transcribed_text": "Bonjour, ceci est un test de reconnaissance vocale française."
+      },
+      "timestamp": 1749062332.550267
+    },
+    {
+      "name": "Performance Benchmarks",
+      "success": true,
+      "details": {
+        "avg_time": 0.638979434967041,
+        "consistency": 0.027280092239379883,
+        "avg_confidence": 0.8000000000000002
+      },
+      "timestamp": 1749062334.519434
+    },
+    {
+      "name": "Real World Scenarios",
+      "success": true,
+      "details": {
+        "successful_scenarios": 4,
+        "total_scenarios": 4,
+        "success_rate": 1.0
+      },
+      "timestamp": 1749062339.095562
+    },
+    {
+      "name": "SpeechRecognizer Integration",
+      "success": true,
+      "details": {
+        "available_engines": [
+          "whisperx",
+          "mock"
+        ],
+        "whisperx_available": true
+      },
+      "timestamp": 1749062339.775289
+    },
+    {
+      "name": "French Default Config",
+      "success": true,
+      "details": {
+        "french_engines": [
+          "whisperx",
+          "vosk",
+          "mock"
+        ],
+        "nlp_french": false
+      },
+      "timestamp": 1749062340.416105
+    }
+  ],
+  "timestamp": 1749062340.435345
+}

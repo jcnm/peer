@@ -6,7 +6,7 @@
 ### 🎤 **Interface SUI Vocal - État Final**
 - ✅ **Script `./run_sui.sh` FONCTIONNEL** - Plus d'erreurs d'exécution
 - ✅ **Voix française fluide** - Synthèse avec moteur `say` optimisé
-- ✅ **Reconnaissance vocale multilingue** - Whisper + Wav2Vec2 + Vosk
+- ✅ **Reconnaissance vocale multilingue** - Whisper + Vosk
 - ✅ **Pipeline complet opérationnel** - De la capture audio à la réponse vocale
 
 ### 🔧 **Configuration Technique Optimisée**
@@ -19,9 +19,9 @@
 
 #### **Architecture Vocal :**
 ```
-AudioCapture → VAD → Whisper/Wav2Vec2 → NLP → TTS(say) → Réponse
-     ↓            ↓         ↓              ↓      ↓
-   16kHz/1ch   WebRTC   Multilingue    spaCy   macOS TTS
+AudioCapture → VAD → Whisper/Vosk → NLP → TTS(say) → Réponse
+     ↓            ↓         ↓          ↓      ↓
+   16kHz/1ch   WebRTC   Multilingue  spaCy   macOS TTS
 ```
 
 #### **Environnement Validé :**
